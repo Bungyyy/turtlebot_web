@@ -1,0 +1,20 @@
+<!--
+  ROS1 Launch file for TurtleBot3 Web Interface.
+
+  Launches rosbridge_websocket so the browser can talk to ROS.
+
+  Usage:
+    roslaunch turtlebot_web web_interface.launch
+    roslaunch turtlebot_web web_interface.launch port:=9090
+-->
+<launch>
+  <arg name="port" default="9090" />
+
+  <!-- rosbridge WebSocket server -->
+  <include file="$(find rosbridge_server)/launch/rosbridge_websocket.launch">
+    <arg name="port" value="$(arg port)" />
+  </include>
+
+  <!-- rosapi (exposes ROS node / topic info to the web) -->
+  <node pkg="rosapi" type="rosapi_node" name="rosapi" output="screen" />
+</launch>
