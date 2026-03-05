@@ -48,6 +48,7 @@ const MapViewer = (() => {
   let scale = 1.0;
   let panX = 0, panY = 0;
   let isDragging = false, dragStart = { x: 0, y: 0 }, dragMoved = false;
+  let autoCenteredOnce = false;   // auto-center on robot when first pose arrives
 
   let interactionMode = null;
   let activeSubs = [];  // track subscriptions for cleanup on reconnect
@@ -68,6 +69,23 @@ const MapViewer = (() => {
 
     document.getElementById("btn-zoom-in").addEventListener("click", () => { scale *= 1.25; _render(); });
     document.getElementById("btn-zoom-out").addEventListener("click", () => { scale *= 0.8; _render(); });
+
+    // Center-on-robot button
+    document.getElementById("btn-center-robot").addEventListener("click", () => {
+      _centerOnRobot();
+    });
+
+    // Fit-map button
+    document.getElementById("btn-fit-map").addEventListener("click", () => {
+      _fitMapToView();
+    });
+
+    // Mouse coordinate display
+    canvas.addEventListener("mousemove", _onMouseMoveCoords);
+    canvas.addEventListener("mouseleave", () => {
+      const el = document.getElementById("map-cursor-pos");
+      if (el) el.textContent = "X: -- Y: --";
+    });
 
     // Layer toggle checkboxes
     document.querySelectorAll(".layer-toggle").forEach((cb) => {
@@ -103,6 +121,7 @@ const MapViewer = (() => {
       hasAmcl = true;
       _pushTrail(robotPose);
       _updatePoseUI(p);
+      _autoCenterOnce();
       _render();
     }, { throttle: 100 }));
 
@@ -116,6 +135,7 @@ const MapViewer = (() => {
       if (!hasAmcl) {
         robotPose = _odomToMap(odomPose);
         _updatePoseUI(p);
+        _autoCenterOnce();
       }
       _pushTrail(robotPose);
       _render();
@@ -905,7 +925,68 @@ const MapViewer = (() => {
     return robotPose;
   }
 
+  /** Auto-center on robot once when first pose arrives. */
+  function _autoCenterOnce() {
+    if (autoCenteredOnce) return;
+    autoCenteredOnce = true;
+    // Zoom so 1 meter ≈ 60px on screen (comfortable for indoor SLAM)
+    const res = mapData ? mapData.info.resolution : 0.05;
+    const desiredScale = 60 * res;  // scale factor: pixels-per-grid-cell
+    _centerOnRobot(Math.max(0.5, Math.min(desiredScale, 8)));
+  }
+
+  // ---- Center / Fit helpers ---------------------------------------------
+
+  /** Pan and zoom so the robot is centered on screen. */
+  function _centerOnRobot(newScale) {
+    if (!robotPose || !canvas) return;
+    const res = mapData ? mapData.info.resolution : 0.05;
+    const s = newScale || scale;
+    scale = s;
+    // Robot world→canvas: px = (worldX / res) * scale
+    panX = -(robotPose.x / res) * s;
+    panY =  (robotPose.y / res) * s;   // Y flipped
+    _render();
+  }
+
+  /** Zoom to fit the entire map in the viewport. */
+  function _fitMapToView() {
+    if (!mapData || !canvas) return;
+    const res = mapData.info.resolution;
+    const mw = mapData.info.width;   // pixels
+    const mh = mapData.info.height;
+    const W = canvas.width;
+    const H = canvas.height;
+
+    // Fit map pixels into viewport with margin
+    const margin = 40;
+    const fitScale = Math.min((W - margin) / mw, (H - margin) / mh);
+    scale = Math.max(0.2, Math.min(fitScale, 30));
+
+    // Center on map center (in world coords)
+    const ox = mapData.info.origin.position.x;
+    const oy = mapData.info.origin.position.y;
+    const cx = ox + (mw * res) / 2;
+    const cy = oy + (mh * res) / 2;
+    panX = -(cx / res) * scale;
+    panY =  (cy / res) * scale;
+    _render();
+  }
+
+  /** Show world coordinates under cursor. */
+  function _onMouseMoveCoords(e) {
+    if (!mapData) return;
+    const rect = canvas.getBoundingClientRect();
+    const cx = e.clientX - rect.left - canvas.width / 2 - panX;
+    const cy = e.clientY - rect.top - canvas.height / 2 - panY;
+    const res = mapData.info.resolution;
+    const worldX = (cx / scale) * res;
+    const worldY = -(cy / scale) * res;
+    const el = document.getElementById("map-cursor-pos");
+    if (el) el.textContent = `X: ${worldX.toFixed(2)} Y: ${worldY.toFixed(2)}`;
+  }
+
   // ---- Public -----------------------------------------------------------
 
-  return { init, subscribeTopics, setMode, navigateTo, getRobotPose };
+  return { init, subscribeTopics, setMode, navigateTo, getRobotPose, centerOnRobot: _centerOnRobot, fitMap: _fitMapToView };
 })();

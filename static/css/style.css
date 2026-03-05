@@ -552,6 +552,12 @@ select.input-sm { cursor: pointer; }
 .btn-estop:hover { background: #dc2626; }
 .btn-estop:active { transform: scale(.97); }
 
+@keyframes estop-flash {
+  0%, 100% { background: var(--accent-red); }
+  50% { background: #fff; color: var(--accent-red); }
+}
+.estop-flash { animation: estop-flash 0.3s ease 3; }
+
 /* ---------- Vision / Camera Tab ---------- */
 .vision-container {
   padding: 10px;

@@ -12,6 +12,8 @@ const Controls = (() => {
   let publishInterval = null;
   let currentTwist = { linear: 0, angular: 0 };
   let enabled = false;
+  let estopActive = false;        // true while e-stop burst is in progress
+  let estopBurstTimer = null;     // interval for repeated zero-vel
 
   function init() {
     // D-pad button events (mouse + touch)
@@ -83,12 +85,42 @@ const Controls = (() => {
 
   function _emergencyStop() {
     _stop();
-    // Cancel Nav2 navigation by publishing empty goal to stop
-    RosBridge.publish(
-      "/navigate_to_pose/_action/cancel_goal",
-      "action_msgs/srv/CancelGoal_Request",
-      {}
-    );
+    estopActive = true;
+
+    // Send a burst of zero-velocity commands (10 msgs over 1 second)
+    // to guarantee delivery even over lossy WiFi
+    let burstCount = 0;
+    if (estopBurstTimer) clearInterval(estopBurstTimer);
+    estopBurstTimer = setInterval(() => {
+      _publishTwist(0, 0);
+      burstCount++;
+      if (burstCount >= 10) {
+        clearInterval(estopBurstTimer);
+        estopBurstTimer = null;
+        estopActive = false;
+      }
+    }, 100);
+
+    // Cancel Nav2 navigation via action client
+    try {
+      const actionClient = RosBridge.actionClient(
+        "/navigate_to_pose",
+        "nav2_msgs/action/NavigateToPose"
+      );
+      actionClient.cancel();
+    } catch (_) { /* Nav2 may not be running */ }
+
+    // Also publish to /goal_pose with zero to stop bt_navigator
+    RosBridge.publish("/cmd_vel", "geometry_msgs/msg/Twist", {
+      linear:  { x: 0, y: 0, z: 0 },
+      angular: { x: 0, y: 0, z: 0 },
+    });
+
+    // Visual feedback
+    const btn = document.getElementById("btn-emergency-stop");
+    btn.classList.add("estop-flash");
+    setTimeout(() => btn.classList.remove("estop-flash"), 1500);
+
     document.getElementById("status-message").textContent = "EMERGENCY STOP activated";
   }
 
