@@ -276,6 +276,18 @@
           <button id="btn-reconnect" class="btn-action btn-primary">Reconnect</button>
         </div>
 
+        <!-- ======= ROS2 NETWORK ======= -->
+        <div class="card">
+          <div class="card-header"><h3>ROS2 Network</h3></div>
+          <div class="form-group">
+            <label>ROS_DOMAIN_ID (must match robot)</label>
+            <input type="number" id="setting-domain-id" value="{{ ros_domain_id|default('30') }}" disabled />
+            <small style="color:#888;">Set via ROS_DOMAIN_ID env var before starting server</small>
+          </div>
+          <button id="btn-check-topics" class="btn-action" style="margin-bottom:8px;">Check ROS2 Topics</button>
+          <pre id="ros2-topics-output" style="display:none; max-height:150px; overflow:auto; font-size:11px; background:#1a1a2e; padding:8px; border-radius:4px; color:#ccc;"></pre>
+        </div>
+
         <!-- ======= ROBOT PARAMS ======= -->
         <div class="card">
           <div class="card-header"><h3>Robot Parameters</h3></div>

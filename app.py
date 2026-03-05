@@ -40,11 +40,15 @@ _processes = {}   # name -> { "proc": Popen, "cmd": str, "log": list }
 _proc_lock = threading.Lock()
 
 
+ROS_DOMAIN_ID = os.environ.get("ROS_DOMAIN_ID", "30")
+
+
 def _build_env():
-    """Build environment with TURTLEBOT3_MODEL and LDS_MODEL set."""
+    """Build environment with TURTLEBOT3_MODEL, LDS_MODEL, and ROS_DOMAIN_ID set."""
     env = os.environ.copy()
     env["TURTLEBOT3_MODEL"] = TURTLEBOT3_MODEL
     env["LDS_MODEL"] = LDS_MODEL
+    env["ROS_DOMAIN_ID"] = ROS_DOMAIN_ID
     return env
 
 
@@ -69,6 +73,28 @@ LAUNCH_COMMANDS = {
 }
 
 
+# Map process names to executables that should be killed before re-launch
+_KILL_PATTERNS = {
+    "rosbridge": ["rosbridge_websocket", "rosapi"],
+    "slam": ["cartographer_node", "cartographer_occupancy_grid_node"],
+    "navigation": ["bt_navigator", "controller_server", "planner_server",
+                    "behavior_server", "lifecycle_manager_navigation"],
+}
+
+
+def _kill_stale(name):
+    """Kill any leftover OS processes from a previous launch of this name."""
+    patterns = _KILL_PATTERNS.get(name, [])
+    for pat in patterns:
+        try:
+            subprocess.run(
+                ["pkill", "-f", pat],
+                timeout=5, capture_output=True,
+            )
+        except Exception:
+            pass
+
+
 def _launch_process(name, extra_args=None, ssh_host=None):
     """Launch a ROS2 process by name. Returns (ok, message).
 
@@ -79,6 +105,9 @@ def _launch_process(name, extra_args=None, ssh_host=None):
         existing = _processes.get(name)
         if existing and existing["proc"].poll() is None:
             return False, f"{name} is already running"
+
+    # Kill any stale processes from a previous session
+    _kill_stale(name)
 
     cmd = list(LAUNCH_COMMANDS.get(name, []))
     if not cmd:
@@ -99,6 +128,7 @@ def _launch_process(name, extra_args=None, ssh_host=None):
             "source ~/catkin_ws/install/setup.bash 2>/dev/null || true; "
             f"export TURTLEBOT3_MODEL={TURTLEBOT3_MODEL}; "
             f"export LDS_MODEL={LDS_MODEL}; "
+            f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID}; "
             f"{remote_cmd}"
         )
         cmd = ["ssh", "-tt", "-o", "StrictHostKeyChecking=no",
@@ -196,6 +226,7 @@ def index():
         rosbridge_port=ROSBRIDGE_PORT,
         turtlebot3_model=TURTLEBOT3_MODEL,
         lds_model=LDS_MODEL,
+        ros_domain_id=ROS_DOMAIN_ID,
     )
 
 
@@ -207,6 +238,7 @@ def config():
         "rosbridge_port": ROSBRIDGE_PORT,
         "turtlebot3_model": TURTLEBOT3_MODEL,
         "map_save_dir": MAP_SAVE_DIR,
+        "ros_domain_id": ROS_DOMAIN_ID,
     })
 
 

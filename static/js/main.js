@@ -400,17 +400,54 @@
   }
 
   function _checkTopicsServerSide() {
-    fetch("/api/ros2/topics")
+    return fetch("/api/ros2/topics")
       .then((r) => r.json())
       .then((data) => {
         if (data.ok && data.topics) {
           console.log("[Main] ROS topics (server-side):", data.topics);
           const hasMap = data.topics.some((t) => t === "/map");
-          if (!hasMap && data.topics.length < 5) {
-            _setStatus("Warning: Very few ROS topics — check ROS2 network");
+          const hasScan = data.topics.some((t) => t === "/scan");
+          const hasOdom = data.topics.some((t) => t === "/odom");
+          if (!hasScan && !hasOdom) {
+            _setStatus("No /scan or /odom — robot topics not visible. Check ROS_DOMAIN_ID matches robot.");
+          } else if (!hasMap) {
+            _setStatus("Warning: /map topic missing — SLAM may not have data yet");
           }
+          return data;
         }
+        return data;
       })
       .catch(() => {});
+  }
+
+  // ---- Check Topics button (Settings page) --------------------------------
+
+  const checkTopicsBtn = document.getElementById("btn-check-topics");
+  if (checkTopicsBtn) {
+    checkTopicsBtn.addEventListener("click", async () => {
+      const output = document.getElementById("ros2-topics-output");
+      output.style.display = "block";
+      output.textContent = "Checking...";
+      try {
+        const data = await (await fetch("/api/ros2/topics")).json();
+        if (data.ok) {
+          const topics = data.topics;
+          const scan = topics.includes("/scan") ? "YES" : "NO";
+          const odom = topics.includes("/odom") ? "YES" : "NO";
+          const map = topics.includes("/map") ? "YES" : "NO";
+          const cmdVel = topics.includes("/cmd_vel") ? "YES" : "NO";
+          output.textContent =
+            `Key topics:\n  /scan: ${scan}\n  /odom: ${odom}\n  /map: ${map}\n  /cmd_vel: ${cmdVel}\n\n` +
+            `All topics (${topics.length}):\n` + topics.join("\n");
+          if (scan === "NO" && odom === "NO") {
+            output.textContent += "\n\n⚠ Robot topics missing!\nMake sure ROS_DOMAIN_ID on robot matches this PC.";
+          }
+        } else {
+          output.textContent = "Error: " + (data.error || "unknown");
+        }
+      } catch (e) {
+        output.textContent = "Failed: " + e.message;
+      }
+    });
   }
 })();
