@@ -99,20 +99,21 @@ const MapViewer = (() => {
       const val = data[i];
       const idx = i * 4;
       if (val === -1) {
-        // Unknown
-        imgData.data[idx]     = 40;
-        imgData.data[idx + 1] = 44;
-        imgData.data[idx + 2] = 52;
+        // Unknown — dark blue-gray
+        imgData.data[idx]     = 30;
+        imgData.data[idx + 1] = 33;
+        imgData.data[idx + 2] = 44;
       } else if (val === 0) {
-        // Free
-        imgData.data[idx]     = 220;
-        imgData.data[idx + 1] = 220;
-        imgData.data[idx + 2] = 220;
+        // Free space — clean light tone
+        imgData.data[idx]     = 235;
+        imgData.data[idx + 1] = 238;
+        imgData.data[idx + 2] = 245;
       } else {
-        // Occupied
-        imgData.data[idx]     = 20;
-        imgData.data[idx + 1] = 20;
-        imgData.data[idx + 2] = 30;
+        // Occupied — gradient from dark to accent based on probability
+        const t = Math.min(val, 100) / 100;
+        imgData.data[idx]     = Math.round(235 * (1 - t) + 20 * t);
+        imgData.data[idx + 1] = Math.round(238 * (1 - t) + 24 * t);
+        imgData.data[idx + 2] = Math.round(245 * (1 - t) + 60 * t);
       }
       imgData.data[idx + 3] = 255;
     }
@@ -121,21 +122,30 @@ const MapViewer = (() => {
     const offscreen = document.createElement("canvas");
     offscreen.width = width;
     offscreen.height = height;
-    offscreen.getContext("2d").putImageData(imgData, 0, 0);
+    const offCtx = offscreen.getContext("2d");
+    offCtx.putImageData(imgData, 0, 0);
     mapImage = offscreen;
   }
 
   function _render() {
     if (!canvas) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#111318";
+
+    // Dark background with subtle gradient
+    const bgGrad = ctx.createRadialGradient(
+      canvas.width / 2, canvas.height / 2, 0,
+      canvas.width / 2, canvas.height / 2, canvas.width * 0.7
+    );
+    bgGrad.addColorStop(0, "#1a1e28");
+    bgGrad.addColorStop(1, "#0e1015");
+    ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.save();
     ctx.translate(canvas.width / 2 + panX, canvas.height / 2 + panY);
     ctx.scale(scale, scale);
 
-    // Draw map
+    // Draw map — disable smoothing for crisp pixels
     if (mapImage && mapData) {
       const res = mapData.info.resolution;
       const ox = mapData.info.origin.position.x;
@@ -144,15 +154,20 @@ const MapViewer = (() => {
       const h = mapData.info.height;
 
       ctx.save();
+      ctx.imageSmoothingEnabled = false;
       ctx.scale(1, -1); // flip Y for ROS convention
       ctx.drawImage(mapImage, ox / res, -(oy / res) - h, w, h);
+      ctx.imageSmoothingEnabled = true;
       ctx.restore();
+
+      // Grid overlay (1-meter intervals)
+      _drawGrid(res, ox, oy, w, h);
     }
 
     // Draw home marker
     _drawMarker(homePose.x, homePose.y, "#3b82f6", 6, "H");
 
-    // Draw goal marker
+    // Draw goal marker with pulse ring
     if (goalPose) {
       _drawMarker(goalPose.x, goalPose.y, "#ef4444", 7, "G");
     }
@@ -165,6 +180,37 @@ const MapViewer = (() => {
     ctx.restore();
   }
 
+  function _drawGrid(res, ox, oy, w, h) {
+    const meterPx = 1.0 / res;  // pixels per meter in map space
+    const mapLeft = ox / res;
+    const mapTop  = -(oy / res) - h;
+
+    // Only draw grid if zoomed in enough to see it
+    if (meterPx * scale < 15) return;
+
+    ctx.save();
+    ctx.scale(1, -1);
+    ctx.strokeStyle = "rgba(100,120,160,0.12)";
+    ctx.lineWidth = 0.5 / scale;
+
+    const startX = Math.ceil(mapLeft / meterPx) * meterPx;
+    const startY = Math.ceil(mapTop / meterPx) * meterPx;
+
+    for (let x = startX; x < mapLeft + w; x += meterPx) {
+      ctx.beginPath();
+      ctx.moveTo(x, mapTop);
+      ctx.lineTo(x, mapTop + h);
+      ctx.stroke();
+    }
+    for (let y = startY; y < mapTop + h; y += meterPx) {
+      ctx.beginPath();
+      ctx.moveTo(mapLeft, y);
+      ctx.lineTo(mapLeft + w, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   function _drawRobot(pose) {
     const res = mapData ? mapData.info.resolution : 0.05;
     const px = pose.x / res;
@@ -173,22 +219,42 @@ const MapViewer = (() => {
 
     ctx.save();
     ctx.translate(px, py);
+
+    // Glow ring (non-rotating)
+    const glow = ctx.createRadialGradient(0, 0, r * 0.5, 0, 0, r * 2.5);
+    glow.addColorStop(0, "rgba(34,197,94,0.25)");
+    glow.addColorStop(1, "rgba(34,197,94,0)");
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = glow;
+    ctx.fill();
+
+    // Range circle
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 1.6, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(34,197,94,0.2)";
+    ctx.lineWidth = 0.8 / scale;
+    ctx.stroke();
+
     ctx.rotate(-pose.theta);
 
-    // Body
+    // Body with gradient
     ctx.beginPath();
     ctx.arc(0, 0, r, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(34,197,94,0.8)";
+    const bodyGrad = ctx.createRadialGradient(-r * 0.3, -r * 0.3, 0, 0, 0, r);
+    bodyGrad.addColorStop(0, "#4ade80");
+    bodyGrad.addColorStop(1, "#16a34a");
+    ctx.fillStyle = bodyGrad;
     ctx.fill();
-    ctx.strokeStyle = "#16a34a";
+    ctx.strokeStyle = "#15803d";
     ctx.lineWidth = 1.5 / scale;
     ctx.stroke();
 
     // Direction arrow
     ctx.beginPath();
-    ctx.moveTo(r, 0);
-    ctx.lineTo(r * 0.4, -r * 0.5);
-    ctx.lineTo(r * 0.4, r * 0.5);
+    ctx.moveTo(r * 1.2, 0);
+    ctx.lineTo(r * 0.35, -r * 0.5);
+    ctx.lineTo(r * 0.35, r * 0.5);
     ctx.closePath();
     ctx.fillStyle = "#fff";
     ctx.fill();
@@ -203,10 +269,30 @@ const MapViewer = (() => {
     const py = -worldY / res;
     const r = size / scale;
 
+    // Soft glow behind marker
+    const glow = ctx.createRadialGradient(px, py, r * 0.3, px, py, r * 2.5);
+    glow.addColorStop(0, color + "44");
+    glow.addColorStop(1, color + "00");
+    ctx.beginPath();
+    ctx.arc(px, py, r * 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = glow;
+    ctx.fill();
+
+    // Outer ring
+    ctx.beginPath();
+    ctx.arc(px, py, r * 1.3, 0, Math.PI * 2);
+    ctx.strokeStyle = color + "66";
+    ctx.lineWidth = 1 / scale;
+    ctx.stroke();
+
+    // Filled circle
     ctx.beginPath();
     ctx.arc(px, py, r, 0, Math.PI * 2);
     ctx.fillStyle = color;
     ctx.fill();
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 1.2 / scale;
+    ctx.stroke();
 
     if (label) {
       ctx.fillStyle = "#fff";
