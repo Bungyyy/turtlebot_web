@@ -12,8 +12,9 @@ const MapViewer = (() => {
   let mapData = null;
   let mapImage = null;        // offscreen canvas for OccupancyGrid
   let robotPose = null;       // { x, y, theta } — best known pose in MAP frame
-  let odomPose = null;        // { x, y, theta } — pose in ODOM frame (fallback)
+  let odomPose = null;        // { x, y, theta } — pose in ODOM frame
   let hasAmcl = false;        // true once AMCL has published
+  let tfMapToOdom = null;     // { x, y, theta } — TF: map → odom transform
   let goalPose = null;        // { x, y }
   let homePose = { x: 0, y: 0 };
 
@@ -97,18 +98,35 @@ const MapViewer = (() => {
       _render();
     }, { throttle: 100 });
 
-    // Odom — in ODOM frame; use as fallback when AMCL is not available (e.g. SLAM mode)
+    // Odom — in ODOM frame; convert to map frame via TF when AMCL is not available
     RosBridge.subscribe("/odom", "nav_msgs/msg/Odometry", (msg) => {
       const p = msg.pose.pose;
       const yaw = _quaternionToYaw(p.orientation);
       odomPose = { x: p.position.x, y: p.position.y, theta: yaw };
       if (!hasAmcl) {
-        robotPose = odomPose;
+        robotPose = _odomToMap(odomPose);
         _updatePoseUI(p);
       }
-      _pushTrail(robotPose || odomPose);
+      _pushTrail(robotPose);
       _render();
     }, { throttle: 100 });
+
+    // TF — listen for map→odom transform to correctly place robot on map
+    RosBridge.subscribe("/tf", "tf2_msgs/msg/TFMessage", (msg) => {
+      const transforms = msg.transforms || [];
+      for (const t of transforms) {
+        const parent = t.header.frame_id.replace(/^\//, "");
+        const child = t.child_frame_id.replace(/^\//, "");
+        if (parent === "map" && child === "odom") {
+          const tr = t.transform;
+          tfMapToOdom = {
+            x: tr.translation.x,
+            y: tr.translation.y,
+            theta: _quaternionToYaw(tr.rotation),
+          };
+        }
+      }
+    }, { throttle: 200 });
 
     // LaserScan
     RosBridge.subscribe("/scan", "sensor_msgs/msg/LaserScan", (msg) => {
@@ -176,7 +194,7 @@ const MapViewer = (() => {
   // ---- Laser scan processing --------------------------------------------
 
   function _processLaserScan(msg) {
-    const pose = robotPose || odomPose;
+    const pose = robotPose || (odomPose && _odomToMap(odomPose));
     if (!pose) return;
     const pts = [];
     const { angle_min, angle_increment, ranges, range_min, range_max } = msg;
@@ -832,6 +850,18 @@ const MapViewer = (() => {
 
   function _quaternionToYaw(q) {
     return Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
+  }
+
+  /** Convert a pose from odom frame to map frame using the cached TF. */
+  function _odomToMap(pose) {
+    if (!tfMapToOdom) return pose;
+    const cos = Math.cos(tfMapToOdom.theta);
+    const sin = Math.sin(tfMapToOdom.theta);
+    return {
+      x: tfMapToOdom.x + cos * pose.x - sin * pose.y,
+      y: tfMapToOdom.y + sin * pose.x + cos * pose.y,
+      theta: pose.theta + tfMapToOdom.theta,
+    };
   }
 
   function _updatePoseUI(pose) {
