@@ -85,7 +85,18 @@ def _launch_process(name, extra_args=None, ssh_host=None):
     # Wrap with SSH if a remote host is specified
     if ssh_host:
         remote_cmd = " ".join(cmd)
-        cmd = ["ssh", "-o", "StrictHostKeyChecking=no", ssh_host, remote_cmd]
+        # Source ROS2 environment on the remote machine since SSH
+        # non-interactive shells don't load .bashrc
+        wrapped = (
+            "source /opt/ros/humble/setup.bash 2>/dev/null || "
+            "source /opt/ros/foxy/setup.bash 2>/dev/null || true; "
+            "source ~/turtlebot3_ws/install/setup.bash 2>/dev/null || "
+            "source ~/catkin_ws/install/setup.bash 2>/dev/null || true; "
+            f"export TURTLEBOT3_MODEL={TURTLEBOT3_MODEL}; "
+            f"{remote_cmd}"
+        )
+        cmd = ["ssh", "-tt", "-o", "StrictHostKeyChecking=no",
+               ssh_host, wrapped]
 
     try:
         env = _build_env()

@@ -157,6 +157,44 @@
     }
   });
 
+  // ---- Process Log Viewer ------------------------------------------------
+
+  const logEl = document.getElementById("process-log");
+  const logBtn = document.getElementById("btn-show-log");
+  let logVisible = false;
+  let logPollTimer = null;
+
+  logBtn.addEventListener("click", () => {
+    logVisible = !logVisible;
+    logEl.style.display = logVisible ? "block" : "none";
+    logBtn.textContent = logVisible ? "Hide Log" : "Show Log";
+
+    if (logVisible) {
+      _pollLog();
+      logPollTimer = setInterval(_pollLog, 2000);
+    } else if (logPollTimer) {
+      clearInterval(logPollTimer);
+      logPollTimer = null;
+    }
+  });
+
+  async function _pollLog() {
+    // Show log for whichever process is most relevant
+    for (const name of ["bringup", "rosbridge", "slam", "navigation"]) {
+      if (LaunchManager.isRunning(name)) {
+        try {
+          const data = await (await fetch(`/api/process_log/${name}`)).json();
+          if (data.log && data.log.length > 0) {
+            logEl.textContent = `[${name}]\n` + data.log.join("\n");
+            logEl.scrollTop = logEl.scrollHeight;
+            return;
+          }
+        } catch (_) {}
+      }
+    }
+    logEl.textContent = "(no running process log)";
+  }
+
   // ---- STEP 2: Mode (SLAM / Navigation) ---------------------------------
 
   const slamControls = document.getElementById("slam-controls");
