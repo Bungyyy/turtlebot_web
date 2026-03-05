@@ -65,8 +65,12 @@ LAUNCH_COMMANDS = {
 }
 
 
-def _launch_process(name, extra_args=None):
-    """Launch a ROS2 process by name. Returns (ok, message)."""
+def _launch_process(name, extra_args=None, ssh_host=None):
+    """Launch a ROS2 process by name. Returns (ok, message).
+
+    If ssh_host is provided (e.g. 'ubuntu@192.168.1.10'), the command
+    is executed on the remote machine via SSH.
+    """
     with _proc_lock:
         if name in _processes and _processes[name]["proc"].poll() is None:
             return False, f"{name} is already running"
@@ -77,6 +81,11 @@ def _launch_process(name, extra_args=None):
 
     if extra_args:
         cmd.extend(extra_args)
+
+    # Wrap with SSH if a remote host is specified
+    if ssh_host:
+        remote_cmd = " ".join(cmd)
+        cmd = ["ssh", "-o", "StrictHostKeyChecking=no", ssh_host, remote_cmd]
 
     try:
         env = _build_env()
@@ -201,11 +210,12 @@ def launch_process():
     data = request.get_json(silent=True) or {}
     name = data.get("name", "")
     extra_args = data.get("args", [])
+    ssh_host = data.get("ssh_host")
 
     if not name:
         return jsonify({"ok": False, "error": "Missing process name"}), 400
 
-    ok, msg = _launch_process(name, extra_args)
+    ok, msg = _launch_process(name, extra_args, ssh_host)
     return jsonify({"ok": ok, "message": msg}), 200 if ok else 409
 
 

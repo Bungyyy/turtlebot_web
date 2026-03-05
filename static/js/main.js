@@ -43,19 +43,15 @@
   }
 
   RosBridge.on("connect", () => {
-    // Clear any pending reconnect timer
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 
     badge.textContent = "ROS Connected";
     badge.className = "badge badge-connected";
     setNodeStatus("node-rosbridge", true);
-    document.getElementById("status-message").textContent = "Connected to rosbridge";
+    _setStatus("Connected to rosbridge");
 
-    // Subscribe to map, pose, etc.
     MapViewer.subscribeTopics();
     Controls.start();
-
-    // Probe node availability
     _checkNodes();
   });
 
@@ -64,9 +60,8 @@
     badge.className = "badge badge-disconnected";
     ["node-rosbridge", "node-turtlebot", "node-slam", "node-navigation", "node-camera"]
       .forEach((id) => setNodeStatus(id, false));
-    document.getElementById("status-message").textContent = "Disconnected – reconnecting...";
+    _setStatus("Disconnected – reconnecting...");
 
-    // Auto-reconnect after 3 s (clear any existing timer first)
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => { reconnectTimer = null; _connect(); }, 3000);
   });
@@ -82,13 +77,87 @@
     RosBridge.connect(host, port);
   }
 
-  // Initial connection
   _connect();
-
-  // Reconnect button (settings tab)
   document.getElementById("btn-reconnect").addEventListener("click", _connect);
 
-  // ---- Mode buttons (SLAM / Navigation) ---------------------------------
+  // ---- Helper ------------------------------------------------------------
+
+  function _setStatus(msg) {
+    document.getElementById("status-message").textContent = msg;
+  }
+
+  function _updateStepBadge(id, text, cls) {
+    const el = document.getElementById(id);
+    if (el) { el.textContent = text; el.className = "step-badge " + (cls || ""); }
+  }
+
+  // ---- STEP 1: Robot Connection (Bringup + ROS Bridge) -------------------
+
+  document.getElementById("btn-bringup").addEventListener("click", async () => {
+    const btn = document.getElementById("btn-bringup");
+    const sshHost = document.getElementById("ssh-host").value.trim();
+
+    if (LaunchManager.isRunning("bringup")) {
+      btn.textContent = "Stopping...";
+      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "bringup" }) });
+      btn.textContent = "Start Bringup";
+      _updateStepBadge("step1-badge", "Offline", "");
+      _setStatus("Bringup stopped");
+      return;
+    }
+
+    btn.textContent = "Starting...";
+    _setStatus("Starting robot bringup...");
+
+    const body = { name: "bringup" };
+    if (sshHost) body.ssh_host = sshHost;
+
+    const res = await (await fetch("/api/launch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })).json();
+
+    if (res.ok) {
+      btn.textContent = "Stop Bringup";
+      _updateStepBadge("step1-badge", "Running", "badge-ok");
+      _setStatus("Robot bringup started" + (sshHost ? ` on ${sshHost}` : ""));
+    } else {
+      btn.textContent = "Start Bringup";
+      _setStatus("Bringup failed: " + (res.message || res.error));
+    }
+  });
+
+  document.getElementById("btn-rosbridge").addEventListener("click", async () => {
+    const btn = document.getElementById("btn-rosbridge");
+
+    if (LaunchManager.isRunning("rosbridge")) {
+      btn.textContent = "Stopping...";
+      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "rosbridge" }) });
+      btn.textContent = "Start ROS Bridge";
+      _setStatus("ROS Bridge stopped");
+      return;
+    }
+
+    btn.textContent = "Starting...";
+    _setStatus("Starting ROS Bridge...");
+    const res = await (await fetch("/api/launch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "rosbridge" }),
+    })).json();
+
+    if (res.ok) {
+      btn.textContent = "Stop ROS Bridge";
+      _setStatus("ROS Bridge started — connecting...");
+      setTimeout(_connect, 2000);
+    } else {
+      btn.textContent = "Start ROS Bridge";
+      _setStatus("ROS Bridge failed: " + (res.message || res.error));
+    }
+  });
+
+  // ---- STEP 2: Mode (SLAM / Navigation) ---------------------------------
 
   const slamControls = document.getElementById("slam-controls");
   const navControls = document.getElementById("nav-controls");
@@ -103,78 +172,130 @@
   }
 
   btnSlam.addEventListener("click", async () => {
+    // If SLAM is already running, stop it
+    if (LaunchManager.isRunning("slam")) {
+      _setStatus("Stopping SLAM...");
+      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "slam" }) });
+      btnSlam.classList.remove("active");
+      slamControls.style.display = "none";
+      _updateStepBadge("step2-badge", "None", "");
+      _setStatus("SLAM stopped");
+      return;
+    }
+
     _showModeUI("slam");
-    document.getElementById("status-message").textContent = "Starting SLAM...";
+    _setStatus("Starting SLAM...");
 
     // Stop Navigation if running
     if (LaunchManager.isRunning("navigation")) {
       await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "navigation" }) });
     }
 
-    // Start SLAM
-    if (!LaunchManager.isRunning("slam")) {
-      const res = await (await fetch("/api/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "slam" }) })).json();
-      document.getElementById("status-message").textContent = res.ok ? "SLAM started — drive around to map" : "SLAM: " + (res.message || res.error);
+    const res = await (await fetch("/api/launch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "slam" }),
+    })).json();
+
+    if (res.ok) {
+      _updateStepBadge("step2-badge", "SLAM", "badge-slam");
+      _setStatus("SLAM started — drive the robot to map the area");
     } else {
-      document.getElementById("status-message").textContent = "SLAM is running — drive around to map";
+      _setStatus("SLAM: " + (res.message || res.error));
     }
   });
 
   btnNav.addEventListener("click", async () => {
-    const mapSelect = document.getElementById("lm-map-select");
+    // If Navigation is already running, stop it
+    if (LaunchManager.isRunning("navigation")) {
+      _setStatus("Stopping Navigation...");
+      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "navigation" }) });
+      btnNav.classList.remove("active");
+      navControls.style.display = "none";
+      _updateStepBadge("step2-badge", "None", "");
+      _setStatus("Navigation stopped");
+      return;
+    }
 
-    // Check if a map is selected
+    const mapSelect = document.getElementById("lm-map-select");
     if (!mapSelect || !mapSelect.value) {
       _showModeUI("navigation");
-      document.getElementById("status-message").textContent = "Select a saved map first, then click Navigation again";
+      _setStatus("Select a saved map first, then click Navigation again");
       return;
     }
 
     _showModeUI("navigation");
-    document.getElementById("status-message").textContent = "Starting Navigation...";
+    _setStatus("Starting Navigation...");
 
     // Stop SLAM if running
     if (LaunchManager.isRunning("slam")) {
       await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "slam" }) });
     }
 
-    // Start Navigation with map
-    if (!LaunchManager.isRunning("navigation")) {
-      const args = [`map:=${mapSelect.value}`];
-      const res = await (await fetch("/api/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "navigation", args }) })).json();
-      document.getElementById("status-message").textContent = res.ok ? "Navigation started — click Navigate to send goals" : "Nav: " + (res.message || res.error);
+    const args = [`map:=${mapSelect.value}`];
+    const res = await (await fetch("/api/launch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "navigation", args }),
+    })).json();
+
+    if (res.ok) {
+      _updateStepBadge("step2-badge", "Nav", "badge-nav");
+      _setStatus("Navigation started — use buttons below to control");
     } else {
-      document.getElementById("status-message").textContent = "Navigation is running";
+      _setStatus("Nav: " + (res.message || res.error));
     }
   });
 
-  // ---- Action buttons ---------------------------------------------------
+  // ---- STEP 3: Action buttons -------------------------------------------
 
   document.getElementById("btn-initial-pose").addEventListener("click", () => {
     MapViewer.setMode("initial_pose");
-    document.getElementById("status-message").textContent = "Click on the map to set initial pose";
+    _setStatus("Click on the map to set initial pose");
   });
 
   document.getElementById("btn-navigate").addEventListener("click", () => {
     MapViewer.setMode("navigate");
     const navNode = document.getElementById("node-navigation");
     const navOk = navNode && navNode.classList.contains("online");
-    const hint = navOk ? "" : " (Nav2 not detected — start Navigation mode first)";
-    document.getElementById("status-message").textContent = "Click on the map to set navigation goal" + hint;
+    const hint = navOk ? "" : " (start Navigation mode first)";
+    _setStatus("Click on the map to set goal" + hint);
   });
 
-  document.getElementById("btn-manual").addEventListener("click", (e) => {
-    e.target.classList.toggle("active");
-    MapViewer.setMode(null);
-    document.getElementById("status-message").textContent = "Manual control mode — use D-pad or WASD keys";
-  });
-
-  // ---- Save map (toolbar button) ----------------------------------------
+  // ---- Save map (toolbar + SLAM controls) --------------------------------
 
   document.getElementById("btn-save-map").addEventListener("click", () => {
-    // Delegate to the Launch Manager save (uses the name from the SLAM controls input)
     LaunchManager.saveMap();
   });
+
+  // ---- Update button text based on process status -------------------------
+
+  setInterval(() => {
+    // Bringup button
+    const bringBtn = document.getElementById("btn-bringup");
+    if (LaunchManager.isRunning("bringup")) {
+      bringBtn.textContent = "Stop Bringup";
+      _updateStepBadge("step1-badge", "Running", "badge-ok");
+    } else if (bringBtn.textContent === "Stop Bringup") {
+      bringBtn.textContent = "Start Bringup";
+      _updateStepBadge("step1-badge", "Offline", "");
+    }
+
+    // ROS Bridge button
+    const rbBtn = document.getElementById("btn-rosbridge");
+    if (LaunchManager.isRunning("rosbridge")) {
+      rbBtn.textContent = "Stop ROS Bridge";
+    } else if (rbBtn.textContent === "Stop ROS Bridge") {
+      rbBtn.textContent = "Start ROS Bridge";
+    }
+
+    // SLAM / Nav badges
+    if (LaunchManager.isRunning("slam")) {
+      _updateStepBadge("step2-badge", "SLAM", "badge-slam");
+    } else if (LaunchManager.isRunning("navigation")) {
+      _updateStepBadge("step2-badge", "Nav", "badge-nav");
+    }
+  }, 3000);
 
   // ---- Node health check ------------------------------------------------
 

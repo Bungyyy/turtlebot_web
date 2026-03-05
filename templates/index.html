@@ -35,69 +35,70 @@
       <div class="panel-grid">
         <!-- LEFT COLUMN -->
         <div class="col-left">
-          <!-- Enable / Robot Status -->
-          <div class="card card-status">
+
+          <!-- STEP 1: Robot Connection -->
+          <div class="card card-workflow">
             <div class="card-header">
-              <h3>Robot Status</h3>
-              <label class="switch">
-                <input type="checkbox" id="toggle-enable" />
-                <span class="slider"></span>
-              </label>
+              <h3>1. Robot</h3>
+              <span id="step1-badge" class="step-badge">Offline</span>
             </div>
-            <div class="status-grid">
-              <div class="status-group">
-                <h4>Position</h4>
-                <div class="status-row"><label>X</label><span id="pos-x">0.000</span></div>
-                <div class="status-row"><label>Y</label><span id="pos-y">0.000</span></div>
-                <div class="status-row"><label>Z</label><span id="pos-z">0.000</span></div>
+            <div class="wf-body">
+              <div class="wf-row">
+                <label>SSH Host</label>
+                <input type="text" id="ssh-host" class="input-sm" placeholder="ubuntu@192.168.1.10" />
               </div>
-              <div class="status-group">
-                <h4>Orientation</h4>
-                <div class="status-row"><label>X</label><span id="ori-x">0.000</span></div>
-                <div class="status-row"><label>Y</label><span id="ori-y">0.000</span></div>
-                <div class="status-row"><label>Z</label><span id="ori-z">0.000</span></div>
-                <div class="status-row"><label>W</label><span id="ori-w">1.000</span></div>
+              <div class="wf-row">
+                <button id="btn-bringup" class="btn-action btn-primary wf-full">Start Bringup</button>
+              </div>
+              <div class="wf-row">
+                <button id="btn-rosbridge" class="btn-action wf-full">Start ROS Bridge</button>
               </div>
             </div>
           </div>
 
-          <!-- Mode & Launch -->
-          <div class="card card-mode">
-            <div class="card-header"><h3>Mode</h3></div>
-            <div class="mode-buttons">
-              <button id="btn-slam-mode" class="btn-mode">SLAM</button>
-              <button id="btn-nav-mode" class="btn-mode">Navigation</button>
+          <!-- STEP 2: Mode Selection -->
+          <div class="card card-workflow">
+            <div class="card-header">
+              <h3>2. Mode</h3>
+              <span id="step2-badge" class="step-badge">None</span>
             </div>
-            <!-- Save Map (visible during SLAM) -->
-            <div id="slam-controls" class="mode-sub" style="display:none">
-              <div class="mode-sub-row">
-                <input type="text" id="lm-map-name" placeholder="my_map" value="map" class="input-sm" />
-                <button id="btn-lm-save-map" class="btn-action btn-primary btn-sm">Save Map</button>
+            <div class="wf-body">
+              <div class="mode-buttons">
+                <button id="btn-slam-mode" class="btn-mode">SLAM</button>
+                <button id="btn-nav-mode" class="btn-mode">Navigation</button>
               </div>
-            </div>
-            <!-- Map selector (visible during Navigation) -->
-            <div id="nav-controls" class="mode-sub" style="display:none">
-              <div class="mode-sub-row">
-                <select id="lm-map-select" class="input-sm">
-                  <option value="">-- Select map --</option>
-                </select>
+              <!-- SLAM sub-controls -->
+              <div id="slam-controls" class="mode-sub" style="display:none">
+                <div class="mode-sub-row">
+                  <input type="text" id="lm-map-name" placeholder="my_map" value="map" class="input-sm" />
+                  <button id="btn-lm-save-map" class="btn-action btn-primary btn-sm">Save Map</button>
+                </div>
+              </div>
+              <!-- Navigation sub-controls -->
+              <div id="nav-controls" class="mode-sub" style="display:none">
+                <div class="mode-sub-row">
+                  <select id="lm-map-select" class="input-sm">
+                    <option value="">-- Select map --</option>
+                  </select>
+                </div>
               </div>
             </div>
           </div>
 
-          <!-- Action Buttons -->
-          <div class="card card-actions">
-            <div class="card-header"><h3>Actions</h3></div>
-            <div class="action-buttons">
-              <button id="btn-initial-pose" class="btn-action">Initial Pose</button>
-              <button id="btn-navigate" class="btn-action btn-primary">Navigate</button>
-              <button id="btn-manual" class="btn-action">Manual Control</button>
+          <!-- STEP 3: Control -->
+          <div class="card card-workflow">
+            <div class="card-header"><h3>3. Control</h3></div>
+            <div class="wf-body">
+              <div class="action-buttons">
+                <button id="btn-initial-pose" class="btn-action">Initial Pose</button>
+                <button id="btn-navigate" class="btn-action btn-primary">Navigate</button>
+              </div>
             </div>
           </div>
 
-          <!-- Manual Control D-pad -->
+          <!-- Teleop D-pad -->
           <div class="card card-controls">
-            <div class="card-header"><h3>Manual Control</h3></div>
+            <div class="card-header"><h3>Teleop</h3></div>
             <div class="speed-control">
               <label>Linear Speed</label>
               <input type="range" id="linear-speed" min="0.01" max="0.5" step="0.01" value="0.15" />
@@ -222,49 +223,38 @@
     <section id="tab-settings" class="tab-panel">
       <div class="settings-container settings-wide">
 
-        <!-- ======= LAUNCH MANAGER ======= -->
+        <!-- ======= PROCESS STATUS ======= -->
         <div class="card card-launch-manager">
-          <div class="card-header"><h3>Launch Manager</h3></div>
-          <p class="lm-desc">Start and stop ROS2 processes. Use SLAM/Navigation buttons on the Mobile tab for quick access.</p>
+          <div class="card-header"><h3>Process Status</h3></div>
+          <p class="lm-desc">All processes are controlled from the Mobile tab.</p>
 
-          <!-- Rosbridge -->
           <div class="lm-row" id="lm-rosbridge">
             <div class="lm-indicator stopped"></div>
             <div class="lm-info">
               <div class="lm-name">ROS Bridge</div>
               <div class="lm-status-text">Stopped</div>
             </div>
-            <button class="btn-action btn-primary" data-launch="rosbridge">Start</button>
           </div>
-
-          <!-- Robot Bringup -->
           <div class="lm-row" id="lm-bringup">
             <div class="lm-indicator stopped"></div>
             <div class="lm-info">
               <div class="lm-name">Robot Bringup</div>
               <div class="lm-status-text">Stopped</div>
             </div>
-            <button class="btn-action btn-primary" data-launch="bringup">Start</button>
           </div>
-
-          <!-- SLAM -->
           <div class="lm-row" id="lm-slam">
             <div class="lm-indicator stopped"></div>
             <div class="lm-info">
-              <div class="lm-name">SLAM Mapping</div>
+              <div class="lm-name">SLAM</div>
               <div class="lm-status-text">Stopped</div>
             </div>
-            <button class="btn-action btn-primary" data-launch="slam">Start</button>
           </div>
-
-          <!-- Navigation -->
           <div class="lm-row" id="lm-navigation">
             <div class="lm-indicator stopped"></div>
             <div class="lm-info">
               <div class="lm-name">Navigation</div>
               <div class="lm-status-text">Stopped</div>
             </div>
-            <button class="btn-action btn-primary" data-launch="navigation">Start</button>
           </div>
         </div>
 

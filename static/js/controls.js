@@ -36,11 +36,16 @@ const Controls = (() => {
     document.addEventListener("keydown", _onKeyDown);
     document.addEventListener("keyup", _onKeyUp);
 
-    // Enable toggle
-    document.getElementById("toggle-enable").addEventListener("change", (e) => {
-      enabled = e.target.checked;
-      if (!enabled) _stop();
-    });
+    // Enable toggle (optional — may not exist in simplified UI)
+    const toggleEl = document.getElementById("toggle-enable");
+    if (toggleEl) {
+      toggleEl.addEventListener("change", (e) => {
+        enabled = e.target.checked;
+        if (!enabled) _stop();
+      });
+    } else {
+      enabled = true; // Always enabled when no toggle exists
+    }
   }
 
   function start() {

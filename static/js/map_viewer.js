@@ -874,13 +874,15 @@ const MapViewer = (() => {
   }
 
   function _updatePoseUI(pose) {
-    document.getElementById("pos-x").textContent = pose.position.x.toFixed(3);
-    document.getElementById("pos-y").textContent = pose.position.y.toFixed(3);
-    document.getElementById("pos-z").textContent = pose.position.z.toFixed(3);
-    document.getElementById("ori-x").textContent = pose.orientation.x.toFixed(3);
-    document.getElementById("ori-y").textContent = pose.orientation.y.toFixed(3);
-    document.getElementById("ori-z").textContent = pose.orientation.z.toFixed(3);
-    document.getElementById("ori-w").textContent = pose.orientation.w.toFixed(3);
+    const ids = ["pos-x","pos-y","pos-z","ori-x","ori-y","ori-z","ori-w"];
+    const vals = [
+      pose.position.x, pose.position.y, pose.position.z,
+      pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w,
+    ];
+    ids.forEach((id, i) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = vals[i].toFixed(3);
+    });
   }
 
   function _setStatus(msg) {

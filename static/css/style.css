@@ -195,6 +195,37 @@ html, body {
 .switch input:checked + .slider { background: var(--accent-green); }
 .switch input:checked + .slider::before { transform: translateX(22px); }
 
+/* ---------- Workflow Cards ---------- */
+.card-workflow .card-header { display: flex; align-items: center; justify-content: space-between; }
+
+.step-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.step-badge.badge-ok { background: var(--accent-green); color: #fff; }
+.step-badge.badge-slam { background: var(--accent-orange, #e67e22); color: #fff; }
+.step-badge.badge-nav { background: var(--accent-blue); color: #fff; }
+
+.wf-body { padding: 8px 14px 12px; }
+
+.wf-row {
+  margin-bottom: 6px;
+}
+
+.wf-row label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 3px;
+}
+
+.wf-full { width: 100%; }
+
 /* ---------- Mode Buttons ---------- */
 .mode-buttons {
   display: flex;
