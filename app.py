@@ -30,6 +30,7 @@ ROSBRIDGE_HOST = os.environ.get("ROSBRIDGE_HOST", "localhost")
 ROSBRIDGE_PORT = int(os.environ.get("ROSBRIDGE_PORT", 9090))
 WEB_PORT = int(os.environ.get("WEB_PORT", 5000))
 TURTLEBOT3_MODEL = os.environ.get("TURTLEBOT3_MODEL", "burger")
+LDS_MODEL = os.environ.get("LDS_MODEL", "LDS-01")
 MAP_SAVE_DIR = os.environ.get("MAP_SAVE_DIR", os.path.expanduser("~/maps"))
 
 # ---------------------------------------------------------------------------
@@ -40,9 +41,10 @@ _proc_lock = threading.Lock()
 
 
 def _build_env():
-    """Build environment with TURTLEBOT3_MODEL set."""
+    """Build environment with TURTLEBOT3_MODEL and LDS_MODEL set."""
     env = os.environ.copy()
     env["TURTLEBOT3_MODEL"] = TURTLEBOT3_MODEL
+    env["LDS_MODEL"] = LDS_MODEL
     return env
 
 
@@ -93,6 +95,7 @@ def _launch_process(name, extra_args=None, ssh_host=None):
             "source ~/turtlebot3_ws/install/setup.bash 2>/dev/null || "
             "source ~/catkin_ws/install/setup.bash 2>/dev/null || true; "
             f"export TURTLEBOT3_MODEL={TURTLEBOT3_MODEL}; "
+            f"export LDS_MODEL={LDS_MODEL}; "
             f"{remote_cmd}"
         )
         cmd = ["ssh", "-tt", "-o", "StrictHostKeyChecking=no",
@@ -191,6 +194,7 @@ def index():
         rosbridge_host=ROSBRIDGE_HOST,
         rosbridge_port=ROSBRIDGE_PORT,
         turtlebot3_model=TURTLEBOT3_MODEL,
+        lds_model=LDS_MODEL,
     )
 
 
