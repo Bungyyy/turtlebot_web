@@ -142,11 +142,12 @@ const MapViewer = (() => {
     }, { throttle: 100 }));
 
     // TF — listen for map→odom transform to correctly place robot on map
-    activeSubs.push(RosBridge.subscribe("/tf", "tf2_msgs/msg/TFMessage", (msg) => {
+    let tfCount = 0;
+    const _processTF = (msg) => {
       const transforms = msg.transforms || [];
       for (const t of transforms) {
-        const parent = t.header.frame_id.replace(/^\//, "");
-        const child = t.child_frame_id.replace(/^\//, "");
+        const parent = (t.header.frame_id || "").replace(/^\//, "");
+        const child = (t.child_frame_id || "").replace(/^\//, "");
         if (parent === "map" && child === "odom") {
           const tr = t.transform;
           tfMapToOdom = {
@@ -154,9 +155,26 @@ const MapViewer = (() => {
             y: tr.translation.y,
             theta: _quaternionToYaw(tr.rotation),
           };
+          if (tfCount++ === 0) console.log("[MapViewer] First map→odom TF received:", tfMapToOdom);
+          // Recompute robot pose immediately with new TF
+          if (!hasAmcl && odomPose) {
+            robotPose = _odomToMap(odomPose);
+          }
         }
       }
-    }, { throttle: 200 }));
+    };
+    // Subscribe with low throttle to not miss transforms
+    activeSubs.push(RosBridge.subscribe("/tf", "tf2_msgs/msg/TFMessage", _processTF, { throttle: 50 }));
+    // Also listen to /tf_static (some transforms published there)
+    activeSubs.push(RosBridge.subscribe("/tf_static", "tf2_msgs/msg/TFMessage", _processTF, { throttle: 0 }));
+
+    // Warn if no TF after 5 seconds
+    setTimeout(() => {
+      if (!tfMapToOdom && !hasAmcl) {
+        console.warn("[MapViewer] No map→odom TF received after 5s. Robot may appear at wrong position.");
+        _setStatus("Warning: No map→odom TF — robot position may be wrong");
+      }
+    }, 5000);
 
     // LaserScan
     let scanCount = 0;
@@ -184,13 +202,23 @@ const MapViewer = (() => {
       _render();
     }, { throttle: 500 }));
 
-    // Local costmap
+    // Local costmap — also used as fallback for robot position
     activeSubs.push(RosBridge.subscribe(
       "/local_costmap/costmap",
       "nav_msgs/msg/OccupancyGrid",
       (msg) => {
         costmapData = msg;
         _buildCostmapImage(msg);
+
+        // Fallback: if no TF and no AMCL, estimate robot position from
+        // costmap center (local costmap is always centered on the robot)
+        if (!tfMapToOdom && !hasAmcl && msg.info) {
+          const cx = msg.info.origin.position.x + (msg.info.width * msg.info.resolution) / 2;
+          const cy = msg.info.origin.position.y + (msg.info.height * msg.info.resolution) / 2;
+          robotPose = { x: cx, y: cy, theta: robotPose ? robotPose.theta : 0 };
+          _autoCenterOnce();
+        }
+
         _render();
       },
       { throttle: 1000 }
@@ -412,6 +440,15 @@ const MapViewer = (() => {
     if (layers.tf && mapData) _drawTFAxes({ x: 0, y: 0, theta: 0 }, res, "map");
 
     ctx.restore();
+
+    // 11. Warning overlay if TF is missing
+    if (!tfMapToOdom && !hasAmcl && odomPose && mapData) {
+      ctx.save();
+      ctx.fillStyle = "rgba(255,180,0,0.85)";
+      ctx.font = "bold 12px monospace";
+      ctx.fillText("⚠ No map→odom TF — robot position may be inaccurate", 10, canvas.height - 30);
+      ctx.restore();
+    }
   }
 
   // ---- World grid with axes ---------------------------------------------
