@@ -44,7 +44,7 @@ const MapViewer = (() => {
 
   let scale = 1.0;
   let panX = 0, panY = 0;
-  let isDragging = false, dragStart = { x: 0, y: 0 };
+  let isDragging = false, dragStart = { x: 0, y: 0 }, dragMoved = false;
 
   let interactionMode = null;
 
@@ -94,16 +94,13 @@ const MapViewer = (() => {
       _render();
     }, { throttle: 100 });
 
-    // Odom fallback + trail source
+    // Odom – always update pose + trail
     RosBridge.subscribe("/odom", "nav_msgs/msg/Odometry", (msg) => {
       const p = msg.pose.pose;
       const yaw = _quaternionToYaw(p.orientation);
-      const pose = { x: p.position.x, y: p.position.y, theta: yaw };
-      if (!robotPose) {
-        robotPose = pose;
-        _updatePoseUI(p);
-      }
-      _pushTrail(pose);
+      robotPose = { x: p.position.x, y: p.position.y, theta: yaw };
+      _pushTrail(robotPose);
+      _updatePoseUI(p);
       _render();
     }, { throttle: 100 });
 
@@ -207,22 +204,20 @@ const MapViewer = (() => {
       const val = data[i];
       const idx = i * 4;
       if (val === -1) {
-        // Unknown – RViz dark gray
-        imgData.data[idx]     = 50;
-        imgData.data[idx + 1] = 50;
-        imgData.data[idx + 2] = 50;
+        // Unknown – RViz default gray (#696969)
+        imgData.data[idx]     = 105;
+        imgData.data[idx + 1] = 105;
+        imgData.data[idx + 2] = 105;
       } else if (val === 0) {
-        // Free – RViz light gray
-        imgData.data[idx]     = 210;
-        imgData.data[idx + 1] = 210;
-        imgData.data[idx + 2] = 210;
+        // Free space – white/near-white like RViz
+        imgData.data[idx]     = 254;
+        imgData.data[idx + 1] = 254;
+        imgData.data[idx + 2] = 254;
       } else {
-        // Occupied – dark, intensity based on probability
-        const t = Math.min(val, 100) / 100;
-        const v = Math.round(210 * (1 - t));
-        imgData.data[idx]     = v;
-        imgData.data[idx + 1] = v;
-        imgData.data[idx + 2] = v;
+        // Occupied – solid black (any occupancy > 0)
+        imgData.data[idx]     = 0;
+        imgData.data[idx + 1] = 0;
+        imgData.data[idx + 2] = 0;
       }
       imgData.data[idx + 3] = 255;
     }
@@ -424,21 +419,25 @@ const MapViewer = (() => {
     ctx.lineTo(0, -axLen);
     ctx.stroke();
 
-    // Axis labels
-    const fontSize = Math.max(10, 14 / scale);
-    ctx.font = `bold ${fontSize}px monospace`;
-    ctx.fillStyle = "#e04040";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("X", axLen + fontSize * 0.6, 0);
-    ctx.fillStyle = "#40c040";
-    ctx.fillText("Y", 0, -axLen - fontSize * 0.6);
-
     // Origin dot
     ctx.beginPath();
     ctx.arc(0, 0, 3 / scale, 0, Math.PI * 2);
     ctx.fillStyle = "#fff";
     ctx.fill();
+
+    // Axis labels — draw in screen coords for consistent size
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const ox = canvas.width / 2 + panX;
+    const oy = canvas.height / 2 + panY;
+    ctx.font = "bold 11px monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#e04040";
+    ctx.fillText("X", ox + axLen * scale + 10, oy);
+    ctx.fillStyle = "#40c040";
+    ctx.fillText("Y", ox, oy - axLen * scale - 10);
+    ctx.restore();
   }
 
   // ---- TF coordinate frame axes -----------------------------------------
@@ -446,7 +445,7 @@ const MapViewer = (() => {
   function _drawTFAxes(pose, res, label) {
     const px = pose.x / res;
     const py = -pose.y / res;
-    const axLen = 15 / scale;
+    const axLen = 20 / scale;
     const axW = 2 / scale;
 
     ctx.save();
@@ -470,7 +469,7 @@ const MapViewer = (() => {
     ctx.closePath();
     ctx.fill();
 
-    // Y axis (green) – left in robot frame (screen up when rotated)
+    // Y axis (green)
     ctx.strokeStyle = "#33ff33";
     ctx.lineWidth = axW;
     ctx.beginPath();
@@ -486,17 +485,21 @@ const MapViewer = (() => {
     ctx.closePath();
     ctx.fill();
 
-    // Label
+    ctx.restore();
+
+    // Label — draw outside scale transform so font is always 10px on screen
     if (label) {
-      const fs = Math.max(8, 10 / scale);
-      ctx.font = `${fs}px monospace`;
-      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      const screenX = (canvas.width / 2 + panX) + px * scale;
+      const screenY = (canvas.height / 2 + panY) + py * scale;
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0); // reset to screen coords
+      ctx.font = "10px monospace";
+      ctx.fillStyle = "rgba(255,255,255,0.6)";
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
-      ctx.fillText(label, 4 / scale, 4 / scale);
+      ctx.fillText(label, screenX + 6, screenY + 6);
+      ctx.restore();
     }
-
-    ctx.restore();
   }
 
   // ---- Odom trail -------------------------------------------------------
@@ -717,13 +720,16 @@ const MapViewer = (() => {
   }
 
   function _onClick(e) {
+    // If we were dragging (pan), ignore the click
+    if (dragMoved) { dragMoved = false; return; }
     if (!interactionMode || !mapData) return;
 
     const rect = canvas.getBoundingClientRect();
     const cx = e.clientX - rect.left - canvas.width / 2 - panX;
     const cy = e.clientY - rect.top - canvas.height / 2 - panY;
-    const worldX = (cx / scale) * mapData.info.resolution;
-    const worldY = -(cy / scale) * mapData.info.resolution;
+    const res = mapData.info.resolution;
+    const worldX = (cx / scale) * res;
+    const worldY = -(cy / scale) * res;
 
     if (interactionMode === "navigate") {
       _sendNavGoal(worldX, worldY);
@@ -780,12 +786,14 @@ const MapViewer = (() => {
   function _onMouseDown(e) {
     if (interactionMode) return;
     isDragging = true;
+    dragMoved = false;
     dragStart = { x: e.clientX - panX, y: e.clientY - panY };
     canvas.style.cursor = "grabbing";
   }
 
   function _onMouseMove(e) {
     if (!isDragging) return;
+    dragMoved = true;
     panX = e.clientX - dragStart.x;
     panY = e.clientY - dragStart.y;
     _render();
