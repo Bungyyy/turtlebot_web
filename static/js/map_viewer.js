@@ -83,8 +83,11 @@ const MapViewer = (() => {
     activeSubs.forEach((t) => { try { t.unsubscribe(); } catch (_) {} });
     activeSubs = [];
 
+    console.log("[MapViewer] Subscribing to topics...");
+
     // OccupancyGrid
     activeSubs.push(RosBridge.subscribe("/map", "nav_msgs/msg/OccupancyGrid", (msg) => {
+      console.log("[MapViewer] /map received:", msg.info.width + "x" + msg.info.height);
       mapData = msg;
       _buildMapImage(msg);
       _render();
@@ -104,7 +107,9 @@ const MapViewer = (() => {
     }, { throttle: 100 }));
 
     // Odom — in ODOM frame; convert to map frame via TF when AMCL is not available
+    let odomCount = 0;
     activeSubs.push(RosBridge.subscribe("/odom", "nav_msgs/msg/Odometry", (msg) => {
+      if (odomCount++ === 0) console.log("[MapViewer] First /odom message received");
       const p = msg.pose.pose;
       const yaw = _quaternionToYaw(p.orientation);
       odomPose = { x: p.position.x, y: p.position.y, theta: yaw };
@@ -134,7 +139,9 @@ const MapViewer = (() => {
     }, { throttle: 200 }));
 
     // LaserScan
+    let scanCount = 0;
     activeSubs.push(RosBridge.subscribe("/scan", "sensor_msgs/msg/LaserScan", (msg) => {
+      if (scanCount++ === 0) console.log("[MapViewer] First /scan message received");
       _processLaserScan(msg);
       _render();
     }, { throttle: 150 }));

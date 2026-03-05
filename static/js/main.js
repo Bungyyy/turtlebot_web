@@ -53,6 +53,7 @@
     MapViewer.subscribeTopics();
     Controls.start();
     _checkNodes();
+    _checkTopics();
   });
 
   RosBridge.on("close", () => {
@@ -352,6 +353,7 @@
     RosBridge.callService("/rosapi/nodes", "rosapi/srv/Nodes", {})
       .then((result) => {
         const nodes = result.nodes || [];
+        console.log("[Main] ROS nodes:", nodes);
         setNodeStatus("node-turtlebot", nodes.some((n) =>
           n.includes("turtlebot") || n.includes("diff_drive") ||
           n.includes("robot_state_publisher")
@@ -368,8 +370,47 @@
         ));
         setNodeStatus("node-camera", nodes.some((n) => n.includes("camera") || n.includes("image") || n.includes("astra")));
       })
-      .catch(() => {
-        console.warn("[Main] Could not query /rosapi/nodes");
+      .catch((err) => {
+        console.warn("[Main] Could not query /rosapi/nodes:", err);
       });
+  }
+
+  // ---- Topic availability check -----------------------------------------
+
+  function _checkTopics() {
+    // Check via rosapi (through rosbridge WebSocket)
+    RosBridge.callService("/rosapi/topics", "rosapi/srv/Topics", {})
+      .then((result) => {
+        const topics = result.topics || [];
+        console.log("[Main] ROS topics (via rosbridge):", topics);
+        const hasMap = topics.some((t) => t === "/map");
+        const hasScan = topics.some((t) => t === "/scan");
+        const hasOdom = topics.some((t) => t === "/odom");
+        const hasCmdVel = topics.some((t) => t === "/cmd_vel");
+        console.log("[Main] Key topics: /map=" + hasMap + " /scan=" + hasScan + " /odom=" + hasOdom + " /cmd_vel=" + hasCmdVel);
+        if (!hasMap && !hasScan && !hasOdom) {
+          _setStatus("Warning: No robot topics found — is bringup running?");
+        }
+      })
+      .catch((err) => {
+        console.warn("[Main] Could not query /rosapi/topics:", err);
+        // Fallback: try server-side topic check
+        _checkTopicsServerSide();
+      });
+  }
+
+  function _checkTopicsServerSide() {
+    fetch("/api/ros2/topics")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.ok && data.topics) {
+          console.log("[Main] ROS topics (server-side):", data.topics);
+          const hasMap = data.topics.some((t) => t === "/map");
+          if (!hasMap && data.topics.length < 5) {
+            _setStatus("Warning: Very few ROS topics — check ROS2 network");
+          }
+        }
+      })
+      .catch(() => {});
   }
 })();

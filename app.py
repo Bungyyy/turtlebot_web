@@ -248,6 +248,21 @@ def stop_process():
     return jsonify({"ok": ok, "message": msg}), 200 if ok else 409
 
 
+@app.route("/api/ros2/topics", methods=["GET"])
+def ros2_topics():
+    """Run 'ros2 topic list' and return the available topics."""
+    try:
+        result = subprocess.run(
+            ["ros2", "topic", "list"],
+            capture_output=True, text=True, timeout=10,
+            env=_build_env(),
+        )
+        topics = [t.strip() for t in result.stdout.strip().split("\n") if t.strip()]
+        return jsonify({"ok": True, "topics": topics})
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return jsonify({"ok": False, "topics": [], "error": str(e)})
+
+
 @app.route("/api/process_log/<name>", methods=["GET"])
 def process_log(name):
     """Get recent log output for a process."""

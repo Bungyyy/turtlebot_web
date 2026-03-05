@@ -56,6 +56,10 @@ const RosBridge = (() => {
 
   /** Subscribe to a topic. Returns the ROSLIB.Topic instance. */
   function subscribe(topicName, msgType, callback, opts) {
+    if (!ros || !connected) {
+      console.warn("[RosBridge] subscribe called but not connected, topic:", topicName);
+    }
+    console.log("[RosBridge] Subscribing to", topicName, "type:", msgType);
     const topic = new ROSLIB.Topic({
       ros,
       name: topicName,
