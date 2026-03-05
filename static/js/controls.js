@@ -44,7 +44,7 @@ const Controls = (() => {
   }
 
   function start() {
-    cmdVelTopic = RosBridge.advertise("/cmd_vel", "geometry_msgs/Twist");
+    cmdVelTopic = RosBridge.advertise("/cmd_vel", "geometry_msgs/msg/Twist");
     // Publish at ~10 Hz while moving
     publishInterval = setInterval(() => {
       if (enabled && (currentTwist.linear !== 0 || currentTwist.angular !== 0)) {
@@ -76,8 +76,12 @@ const Controls = (() => {
 
   function _emergencyStop() {
     _stop();
-    // Also cancel move_base goal
-    RosBridge.publish("/move_base/cancel", "actionlib_msgs/GoalID", {});
+    // Cancel Nav2 navigation by publishing empty goal to stop
+    RosBridge.publish(
+      "/navigate_to_pose/_action/cancel_goal",
+      "action_msgs/srv/CancelGoal_Request",
+      {}
+    );
     document.getElementById("status-message").textContent = "EMERGENCY STOP activated";
   }
 

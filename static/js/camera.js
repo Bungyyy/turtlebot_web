@@ -39,7 +39,7 @@ const Camera = (() => {
     if (isCompressed) {
       subscription = RosBridge.subscribe(
         topic,
-        "sensor_msgs/CompressedImage",
+        "sensor_msgs/msg/CompressedImage",
         _onCompressedImage,
         { throttle: 66 }
       );
@@ -47,7 +47,7 @@ const Camera = (() => {
       // Raw images via ros2djs or web_video_server fallback
       subscription = RosBridge.subscribe(
         topic,
-        "sensor_msgs/Image",
+        "sensor_msgs/msg/Image",
         _onRawImage,
         { throttle: 100 }
       );

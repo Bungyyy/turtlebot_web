@@ -1,9 +1,12 @@
 """
-ROS2 Launch file for TurtleBot3 Web Interface.
+ROS2 Humble Launch file for TurtleBot3 Web Interface.
 
 Launches:
-  1. rosbridge_websocket (for browser ↔ ROS communication)
-  2. web_video_server    (optional camera stream fallback)
+  1. rosbridge_websocket (for browser <-> ROS2 communication)
+  2. rosapi_node          (exposes topic/node info to the web UI)
+
+Prerequisites:
+  sudo apt install ros-humble-rosbridge-suite
 
 Usage:
   ros2 launch turtlebot_web web_interface.launch.py
@@ -11,26 +14,32 @@ Usage:
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, LogInfo
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    LogInfo,
+)
+from launch.launch_description_sources import XMLLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from ament_index_python.packages import get_package_share_directory
+import os
 
 
 def generate_launch_description():
     rosbridge_port_arg = DeclareLaunchArgument(
-        "rosbridge_port", default_value="9090",
-        description="Port for the rosbridge WebSocket server"
+        "rosbridge_port",
+        default_value="9090",
+        description="Port for the rosbridge WebSocket server",
     )
 
-    rosbridge_node = Node(
-        package="rosbridge_server",
-        executable="rosbridge_websocket",
-        name="rosbridge_websocket",
-        output="screen",
-        parameters=[{
-            "port": LaunchConfiguration("rosbridge_port"),
-            "unregister_timeout": 60.0,
-        }],
+    # Use the official rosbridge_server XML launch file
+    rosbridge_dir = get_package_share_directory("rosbridge_server")
+    rosbridge_launch = IncludeLaunchDescription(
+        XMLLaunchDescriptionSource(
+            os.path.join(rosbridge_dir, "launch", "rosbridge_websocket_launch.xml")
+        ),
+        launch_arguments={"port": LaunchConfiguration("rosbridge_port")}.items(),
     )
 
     rosapi_node = Node(
@@ -40,9 +49,11 @@ def generate_launch_description():
         output="screen",
     )
 
-    return LaunchDescription([
-        rosbridge_port_arg,
-        LogInfo(msg="Starting TurtleBot3 Web Interface bridge..."),
-        rosbridge_node,
-        rosapi_node,
-    ])
+    return LaunchDescription(
+        [
+            rosbridge_port_arg,
+            LogInfo(msg="Starting TurtleBot3 Web Interface (ROS2 Humble)..."),
+            rosbridge_launch,
+            rosapi_node,
+        ]
+    )

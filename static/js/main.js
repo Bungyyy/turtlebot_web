@@ -117,7 +117,7 @@
   // ---- Save map ---------------------------------------------------------
 
   document.getElementById("btn-save-map").addEventListener("click", () => {
-    RosBridge.callService("/map_saver/save_map", "nav2_msgs/SaveMap", {})
+    RosBridge.callService("/map_saver/save_map", "nav2_msgs/srv/SaveMap", {})
       .then(() => {
         document.getElementById("status-message").textContent = "Map saved successfully";
       })
@@ -129,7 +129,7 @@
   // ---- Node health check ------------------------------------------------
 
   function _checkNodes() {
-    RosBridge.callService("/rosapi/nodes", "rosapi/Nodes", {})
+    RosBridge.callService("/rosapi/nodes", "rosapi/srv/Nodes", {})
       .then((result) => {
         const nodes = result.nodes || [];
         setNodeStatus("node-turtlebot", nodes.some((n) => n.includes("turtlebot")));

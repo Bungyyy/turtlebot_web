@@ -44,7 +44,7 @@ const MapViewer = (() => {
 
   function subscribeTopics() {
     // OccupancyGrid
-    RosBridge.subscribe("/map", "nav_msgs/OccupancyGrid", (msg) => {
+    RosBridge.subscribe("/map", "nav_msgs/msg/OccupancyGrid", (msg) => {
       mapData = msg;
       _buildMapImage(msg);
       _render();
@@ -53,7 +53,7 @@ const MapViewer = (() => {
     }, { throttle: 2000 });
 
     // Robot pose (AMCL or odom)
-    RosBridge.subscribe("/amcl_pose", "geometry_msgs/PoseWithCovarianceStamped", (msg) => {
+    RosBridge.subscribe("/amcl_pose", "geometry_msgs/msg/PoseWithCovarianceStamped", (msg) => {
       const p = msg.pose.pose;
       const yaw = _quaternionToYaw(p.orientation);
       robotPose = { x: p.position.x, y: p.position.y, theta: yaw };
@@ -62,7 +62,7 @@ const MapViewer = (() => {
     }, { throttle: 200 });
 
     // Fallback: odom
-    RosBridge.subscribe("/odom", "nav_msgs/Odometry", (msg) => {
+    RosBridge.subscribe("/odom", "nav_msgs/msg/Odometry", (msg) => {
       if (!robotPose) {
         const p = msg.pose.pose;
         const yaw = _quaternionToYaw(p.orientation);
@@ -72,11 +72,21 @@ const MapViewer = (() => {
       }
     }, { throttle: 200 });
 
-    // Navigation result
-    RosBridge.subscribe("/move_base/result", "move_base_msgs/MoveBaseActionResult", () => {
-      goalPose = null;
-      _render();
-    });
+    // Nav2 navigation feedback – clear goal when reached
+    RosBridge.subscribe(
+      "/navigate_to_pose/_action/status",
+      "action_msgs/msg/GoalStatusArray",
+      (msg) => {
+        // Status 4 = SUCCEEDED
+        const statuses = msg.status_list || [];
+        if (statuses.length > 0 && statuses[statuses.length - 1].status === 4) {
+          goalPose = null;
+          _render();
+          _setStatus("Navigation goal reached");
+        }
+      },
+      { throttle: 1000 }
+    );
   }
 
   // ---- Map Rendering ----------------------------------------------------
@@ -237,7 +247,7 @@ const MapViewer = (() => {
     goalPose = { x, y };
     _render();
 
-    RosBridge.publish("/move_base_simple/goal", "geometry_msgs/PoseStamped", {
+    RosBridge.publish("/goal_pose", "geometry_msgs/msg/PoseStamped", {
       header: { frame_id: "map" },
       pose: {
         position: { x, y, z: 0 },
@@ -248,7 +258,7 @@ const MapViewer = (() => {
   }
 
   function _sendInitialPose(x, y) {
-    RosBridge.publish("/initialpose", "geometry_msgs/PoseWithCovarianceStamped", {
+    RosBridge.publish("/initialpose", "geometry_msgs/msg/PoseWithCovarianceStamped", {
       header: { frame_id: "map" },
       pose: {
         pose: {
@@ -264,7 +274,7 @@ const MapViewer = (() => {
   function navigateTo(x, y, oz, ow) {
     goalPose = { x, y };
     _render();
-    RosBridge.publish("/move_base_simple/goal", "geometry_msgs/PoseStamped", {
+    RosBridge.publish("/goal_pose", "geometry_msgs/msg/PoseStamped", {
       header: { frame_id: "map" },
       pose: {
         position: { x, y, z: 0 },
