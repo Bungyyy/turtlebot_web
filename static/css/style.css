@@ -313,12 +313,26 @@ html, body {
 
 #map-legend {
   position: absolute;
-  bottom: 40px;
-  left: 10px;
-  background: rgba(0,0,0,.7);
-  padding: 8px 12px;
+  top: 8px;
+  right: 8px;
+  background: rgba(0,0,0,.82);
+  padding: 8px 10px;
   border-radius: 6px;
   font-size: 11px;
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255,255,255,.08);
+  max-height: calc(100% - 60px);
+  overflow-y: auto;
+  z-index: 10;
+}
+
+.legend-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .8px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  font-weight: 700;
 }
 
 .legend-item {
@@ -326,6 +340,19 @@ html, body {
   align-items: center;
   gap: 6px;
   margin: 3px 0;
+  cursor: pointer;
+  padding: 1px 0;
+  user-select: none;
+}
+
+.legend-item:hover { color: #fff; }
+
+.legend-item input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  accent-color: var(--accent-blue);
+  cursor: pointer;
+  margin: 0;
 }
 
 .dot {
@@ -333,11 +360,14 @@ html, body {
   height: 10px;
   border-radius: 50%;
   display: inline-block;
+  flex-shrink: 0;
 }
 
 .dot-green  { background: var(--accent-green); }
 .dot-blue   { background: var(--accent-blue); }
 .dot-red    { background: var(--accent-red); }
+.dot-orange { background: var(--accent-orange); }
+.dot-purple { background: var(--accent-purple); }
 
 #map-status {
   position: absolute;

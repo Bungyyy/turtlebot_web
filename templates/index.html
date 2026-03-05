@@ -118,9 +118,15 @@
             <div id="map-container">
               <canvas id="map-canvas"></canvas>
               <div id="map-legend">
-                <div class="legend-item"><span class="dot dot-green"></span> Robot Position</div>
-                <div class="legend-item"><span class="dot dot-blue"></span> Home</div>
-                <div class="legend-item"><span class="dot dot-red"></span> Goal</div>
+                <div class="legend-title">Layers</div>
+                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="map" checked /><span class="dot" style="background:#d2d2d2"></span> Map</label>
+                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="robot" checked /><span class="dot dot-green"></span> Robot</label>
+                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="laser" checked /><span class="dot dot-red"></span> LaserScan</label>
+                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="odom" checked /><span class="dot dot-orange"></span> Odom Trail</label>
+                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="path" checked /><span class="dot" style="background:#00c850"></span> Nav Path</label>
+                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="costmap" checked /><span class="dot dot-purple"></span> Costmap</label>
+                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="tf" checked /><span class="dot" style="background:#ff3333"></span> TF Frames</label>
+                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="grid" checked /><span class="dot" style="background:#666"></span> Grid</label>
               </div>
               <div id="map-status">
                 <span id="map-resolution">Res: --</span>
