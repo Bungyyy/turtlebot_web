@@ -217,6 +217,36 @@ html, body {
 .btn-mode:hover { border-color: var(--accent-blue); color: var(--text-primary); }
 .btn-mode.active { background: var(--accent-blue); color: #fff; border-color: var(--accent-blue); }
 
+/* Mode sub-controls (save map / map selector) */
+.mode-sub {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.mode-sub-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.input-sm {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+select.input-sm { cursor: pointer; }
+
+.btn-sm {
+  padding: 6px 12px !important;
+  font-size: 12px !important;
+  white-space: nowrap;
+}
+
 /* ---------- Action Buttons ---------- */
 .action-buttons {
   display: flex;

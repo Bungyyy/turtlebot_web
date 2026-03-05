@@ -88,44 +88,64 @@
   // Reconnect button (settings tab)
   document.getElementById("btn-reconnect").addEventListener("click", _connect);
 
-  // ---- Mode buttons -----------------------------------------------------
+  // ---- Mode buttons (SLAM / Navigation) ---------------------------------
 
-  document.getElementById("btn-nav-mode").addEventListener("click", async () => {
-    document.getElementById("btn-nav-mode").classList.add("active");
-    document.getElementById("btn-slam-mode").classList.remove("active");
+  const slamControls = document.getElementById("slam-controls");
+  const navControls = document.getElementById("nav-controls");
+  const btnSlam = document.getElementById("btn-slam-mode");
+  const btnNav = document.getElementById("btn-nav-mode");
 
-    // Stop SLAM if running, start Navigation
-    if (LaunchManager.isRunning("slam")) {
-      document.getElementById("status-message").textContent = "Stopping SLAM...";
-      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "slam" }) });
-    }
+  function _showModeUI(mode) {
+    btnSlam.classList.toggle("active", mode === "slam");
+    btnNav.classList.toggle("active", mode === "navigation");
+    slamControls.style.display = mode === "slam" ? "block" : "none";
+    navControls.style.display = mode === "navigation" ? "block" : "none";
+  }
 
-    if (!LaunchManager.isRunning("navigation")) {
-      document.getElementById("status-message").textContent = "Starting Navigation...";
-      const mapSelect = document.getElementById("lm-map-select");
-      const args = mapSelect && mapSelect.value ? [`map:=${mapSelect.value}`] : [];
-      await fetch("/api/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "navigation", args }) });
-    }
+  btnSlam.addEventListener("click", async () => {
+    _showModeUI("slam");
+    document.getElementById("status-message").textContent = "Starting SLAM...";
 
-    document.getElementById("status-message").textContent = "Mode: Navigation";
-  });
-
-  document.getElementById("btn-slam-mode").addEventListener("click", async () => {
-    document.getElementById("btn-slam-mode").classList.add("active");
-    document.getElementById("btn-nav-mode").classList.remove("active");
-
-    // Stop Navigation if running, start SLAM
+    // Stop Navigation if running
     if (LaunchManager.isRunning("navigation")) {
-      document.getElementById("status-message").textContent = "Stopping Navigation...";
       await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "navigation" }) });
     }
 
+    // Start SLAM
     if (!LaunchManager.isRunning("slam")) {
-      document.getElementById("status-message").textContent = "Starting SLAM...";
-      await fetch("/api/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "slam" }) });
+      const res = await (await fetch("/api/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "slam" }) })).json();
+      document.getElementById("status-message").textContent = res.ok ? "SLAM started — drive around to map" : "SLAM: " + (res.message || res.error);
+    } else {
+      document.getElementById("status-message").textContent = "SLAM is running — drive around to map";
+    }
+  });
+
+  btnNav.addEventListener("click", async () => {
+    const mapSelect = document.getElementById("lm-map-select");
+
+    // Check if a map is selected
+    if (!mapSelect || !mapSelect.value) {
+      _showModeUI("navigation");
+      document.getElementById("status-message").textContent = "Select a saved map first, then click Navigation again";
+      return;
     }
 
-    document.getElementById("status-message").textContent = "Mode: SLAM";
+    _showModeUI("navigation");
+    document.getElementById("status-message").textContent = "Starting Navigation...";
+
+    // Stop SLAM if running
+    if (LaunchManager.isRunning("slam")) {
+      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "slam" }) });
+    }
+
+    // Start Navigation with map
+    if (!LaunchManager.isRunning("navigation")) {
+      const args = [`map:=${mapSelect.value}`];
+      const res = await (await fetch("/api/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "navigation", args }) })).json();
+      document.getElementById("status-message").textContent = res.ok ? "Navigation started — click Navigate to send goals" : "Nav: " + (res.message || res.error);
+    } else {
+      document.getElementById("status-message").textContent = "Navigation is running";
+    }
   });
 
   // ---- Action buttons ---------------------------------------------------
@@ -139,53 +159,21 @@
     MapViewer.setMode("navigate");
     const navNode = document.getElementById("node-navigation");
     const navOk = navNode && navNode.classList.contains("online");
-    const hint = navOk ? "" : " (Nav2 not detected — launch navigation first)";
+    const hint = navOk ? "" : " (Nav2 not detected — start Navigation mode first)";
     document.getElementById("status-message").textContent = "Click on the map to set navigation goal" + hint;
   });
 
   document.getElementById("btn-manual").addEventListener("click", (e) => {
     e.target.classList.toggle("active");
     MapViewer.setMode(null);
-    document.getElementById("status-message").textContent = "Manual control mode";
+    document.getElementById("status-message").textContent = "Manual control mode — use D-pad or WASD keys";
   });
 
-  // ---- Save map ---------------------------------------------------------
+  // ---- Save map (toolbar button) ----------------------------------------
 
-  document.getElementById("btn-save-map").addEventListener("click", async () => {
-    const statusEl = document.getElementById("status-message");
-    statusEl.textContent = "Saving map...";
-
-    // Try ROS services first (rosbridge direct)
-    const services = [
-      { name: "/slam_toolbox/serialize_state", type: "slam_toolbox/srv/SerializePoseGraph", req: { filename: "map" }, label: "slam_toolbox serialize" },
-      { name: "/slam_toolbox/save_map", type: "slam_toolbox/srv/SaveMap", req: { name: { data: "map" } }, label: "slam_toolbox save_map" },
-      { name: "/map_saver/save_map", type: "nav2_msgs/srv/SaveMap", req: { map_url: "map", image_format: "pgm" }, label: "nav2 map_saver" },
-    ];
-
-    for (const svc of services) {
-      try {
-        await RosBridge.callService(svc.name, svc.type, svc.req);
-        statusEl.textContent = `Map saved via ${svc.label}`;
-        return;
-      } catch (_) { /* try next */ }
-    }
-
-    // Fallback: call our backend which runs the CLI command
-    try {
-      const resp = await fetch("/api/save_map", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "map" }),
-      });
-      const data = await resp.json();
-      if (data.ok) {
-        statusEl.textContent = `Map saved to ${data.path} (${data.method})`;
-        return;
-      }
-      statusEl.textContent = `Map save failed: ${data.error}`;
-    } catch (err) {
-      statusEl.textContent = `Map save failed: ${err.message}`;
-    }
+  document.getElementById("btn-save-map").addEventListener("click", () => {
+    // Delegate to the Launch Manager save (uses the name from the SLAM controls input)
+    LaunchManager.saveMap();
   });
 
   // ---- Node health check ------------------------------------------------

@@ -10,22 +10,15 @@ const LaunchManager = (() => {
   let pollTimer = null;
   let currentStatus = {};
 
-  const PROCESS_LABELS = {
-    rosbridge:  "ROS Bridge",
-    bringup:    "Robot Bringup",
-    slam:       "SLAM Mapping",
-    navigation: "Navigation",
-  };
-
   function init() {
-    // Start/stop button handlers
+    // Start/stop button handlers (Settings tab)
     document.querySelectorAll("[data-launch]").forEach((btn) => {
       btn.addEventListener("click", () => _toggleProcess(btn.dataset.launch));
     });
 
-    // Save map button in launch manager
+    // Save map button in Mode card (SLAM controls)
     const saveBtn = document.getElementById("btn-lm-save-map");
-    if (saveBtn) saveBtn.addEventListener("click", _saveMap);
+    if (saveBtn) saveBtn.addEventListener("click", saveMap);
 
     // Start polling process status
     _poll();
@@ -71,8 +64,7 @@ const LaunchManager = (() => {
       result = await _apiPost("stop", { name });
     } else {
       const args = _getExtraArgs(name);
-      const sshHost = _getSSHHost(name);
-      result = await _apiPost("launch", { name, args, ssh_host: sshHost });
+      result = await _apiPost("launch", { name, args });
     }
 
     _setStatusMsg(result.message || result.error || "");
@@ -92,14 +84,6 @@ const LaunchManager = (() => {
     return [];
   }
 
-  function _getSSHHost(name) {
-    if (name === "bringup") {
-      const input = document.getElementById("lm-ssh-host");
-      if (input && input.value.trim()) return input.value.trim();
-    }
-    return null;
-  }
-
   // ---- Status polling -----------------------------------------------------
 
   async function _poll() {
@@ -107,8 +91,6 @@ const LaunchManager = (() => {
     if (!status) return;
     currentStatus = status;
     _updateUI(status);
-
-    // Also refresh map list
     _refreshMaps();
   }
 
@@ -137,18 +119,21 @@ const LaunchManager = (() => {
 
   // ---- Map management -----------------------------------------------------
 
-  let _mapsLoaded = false;
+  let _lastMapCount = -1;
 
   async function _refreshMaps() {
-    if (_mapsLoaded) return; // Only load once, then on save
     const data = await _apiGet("maps");
     if (!data || !data.maps) return;
+
+    // Only update DOM if maps changed
+    if (data.maps.length === _lastMapCount) return;
+    _lastMapCount = data.maps.length;
 
     const select = document.getElementById("lm-map-select");
     if (!select) return;
 
     const currentVal = select.value;
-    select.innerHTML = '<option value="">-- Select a map --</option>';
+    select.innerHTML = '<option value="">-- Select map --</option>';
     data.maps.forEach((m) => {
       const opt = document.createElement("option");
       opt.value = m.path;
@@ -156,12 +141,15 @@ const LaunchManager = (() => {
       select.appendChild(opt);
     });
 
-    // Restore selection
-    if (currentVal) select.value = currentVal;
-    _mapsLoaded = true;
+    // Restore selection or auto-select last map
+    if (currentVal) {
+      select.value = currentVal;
+    } else if (data.maps.length > 0) {
+      select.value = data.maps[data.maps.length - 1].path;
+    }
   }
 
-  async function _saveMap() {
+  async function saveMap() {
     const nameInput = document.getElementById("lm-map-name");
     const name = (nameInput && nameInput.value.trim()) || "map";
 
@@ -169,8 +157,8 @@ const LaunchManager = (() => {
     const result = await _apiPost("save_map", { name });
 
     if (result.ok) {
-      _setStatusMsg(`Map saved: ${result.path}`);
-      _mapsLoaded = false; // Force refresh
+      _setStatusMsg(`Map saved: ${name}`);
+      _lastMapCount = -1; // Force refresh
       _refreshMaps();
     } else {
       _setStatusMsg(`Map save failed: ${result.error}`);
@@ -189,5 +177,5 @@ const LaunchManager = (() => {
     return currentStatus[name] && currentStatus[name].running;
   }
 
-  return { init, isRunning };
+  return { init, isRunning, saveMap };
 })();

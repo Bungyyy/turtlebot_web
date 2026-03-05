@@ -61,12 +61,27 @@
             </div>
           </div>
 
-          <!-- Mode Selector -->
+          <!-- Mode & Launch -->
           <div class="card card-mode">
             <div class="card-header"><h3>Mode</h3></div>
             <div class="mode-buttons">
-              <button id="btn-nav-mode" class="btn-mode active">Navigation</button>
               <button id="btn-slam-mode" class="btn-mode">SLAM</button>
+              <button id="btn-nav-mode" class="btn-mode">Navigation</button>
+            </div>
+            <!-- Save Map (visible during SLAM) -->
+            <div id="slam-controls" class="mode-sub" style="display:none">
+              <div class="mode-sub-row">
+                <input type="text" id="lm-map-name" placeholder="my_map" value="map" class="input-sm" />
+                <button id="btn-lm-save-map" class="btn-action btn-primary btn-sm">Save Map</button>
+              </div>
+            </div>
+            <!-- Map selector (visible during Navigation) -->
+            <div id="nav-controls" class="mode-sub" style="display:none">
+              <div class="mode-sub-row">
+                <select id="lm-map-select" class="input-sm">
+                  <option value="">-- Select map --</option>
+                </select>
+              </div>
             </div>
           </div>
 
@@ -210,7 +225,7 @@
         <!-- ======= LAUNCH MANAGER ======= -->
         <div class="card card-launch-manager">
           <div class="card-header"><h3>Launch Manager</h3></div>
-          <p class="lm-desc">Start and stop ROS2 processes from here. No terminal needed.</p>
+          <p class="lm-desc">Start and stop ROS2 processes. Use SLAM/Navigation buttons on the Mobile tab for quick access.</p>
 
           <!-- Rosbridge -->
           <div class="lm-row" id="lm-rosbridge">
@@ -231,10 +246,6 @@
             </div>
             <button class="btn-action btn-primary" data-launch="bringup">Start</button>
           </div>
-          <div class="lm-sub-row">
-            <label>SSH Host (e.g. ubuntu@192.168.1.10)</label>
-            <input type="text" id="lm-ssh-host" placeholder="ubuntu@192.168.1.10" />
-          </div>
 
           <!-- SLAM -->
           <div class="lm-row" id="lm-slam">
@@ -246,12 +257,6 @@
             <button class="btn-action btn-primary" data-launch="slam">Start</button>
           </div>
 
-          <!-- Save Map -->
-          <div class="lm-sub-row lm-save-row">
-            <input type="text" id="lm-map-name" placeholder="my_map" value="map" />
-            <button id="btn-lm-save-map" class="btn-action btn-primary">Save Map</button>
-          </div>
-
           <!-- Navigation -->
           <div class="lm-row" id="lm-navigation">
             <div class="lm-indicator stopped"></div>
@@ -260,12 +265,6 @@
               <div class="lm-status-text">Stopped</div>
             </div>
             <button class="btn-action btn-primary" data-launch="navigation">Start</button>
-          </div>
-          <div class="lm-sub-row">
-            <label>Map File</label>
-            <select id="lm-map-select">
-              <option value="">-- Select a map --</option>
-            </select>
           </div>
         </div>
 
