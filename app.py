@@ -59,9 +59,11 @@ LAUNCH_COMMANDS = {
     ],
     "slam": [
         "ros2", "launch", "turtlebot3_cartographer", "cartographer.launch.py",
+        "use_rviz:=false",
     ],
     "navigation": [
         "ros2", "launch", "turtlebot3_navigation2", "navigation2.launch.py",
+        "use_rviz:=false",
         # map:= argument is appended dynamically
     ],
 }
