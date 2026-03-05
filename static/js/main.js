@@ -116,14 +116,44 @@
 
   // ---- Save map ---------------------------------------------------------
 
-  document.getElementById("btn-save-map").addEventListener("click", () => {
-    RosBridge.callService("/map_saver/save_map", "nav2_msgs/srv/SaveMap", {})
-      .then(() => {
-        document.getElementById("status-message").textContent = "Map saved successfully";
-      })
-      .catch(() => {
-        document.getElementById("status-message").textContent = "Map save failed (service unavailable)";
-      });
+  document.getElementById("btn-save-map").addEventListener("click", async () => {
+    const statusEl = document.getElementById("status-message");
+    statusEl.textContent = "Saving map...";
+
+    // Try slam_toolbox serialize first (most common for SLAM mode)
+    try {
+      await RosBridge.callService(
+        "/slam_toolbox/serialize_state",
+        "slam_toolbox/srv/SerializePoseGraph",
+        { filename: "map" }
+      );
+      statusEl.textContent = "Map serialized via slam_toolbox";
+      return;
+    } catch (_) { /* try next */ }
+
+    // Fallback: slam_toolbox save_map
+    try {
+      await RosBridge.callService(
+        "/slam_toolbox/save_map",
+        "slam_toolbox/srv/SaveMap",
+        { name: { data: "map" } }
+      );
+      statusEl.textContent = "Map saved via slam_toolbox";
+      return;
+    } catch (_) { /* try next */ }
+
+    // Fallback: nav2 map_saver
+    try {
+      await RosBridge.callService(
+        "/map_saver/save_map",
+        "nav2_msgs/srv/SaveMap",
+        { map_url: "map", image_format: "pgm" }
+      );
+      statusEl.textContent = "Map saved via nav2 map_saver";
+      return;
+    } catch (_) { /* all failed */ }
+
+    statusEl.textContent = "Map save failed — no save service found. Run: ros2 run nav2_map_server map_saver_cli -f ~/map";
   });
 
   // ---- Node health check ------------------------------------------------
