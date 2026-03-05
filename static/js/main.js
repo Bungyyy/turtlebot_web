@@ -125,40 +125,37 @@
     const statusEl = document.getElementById("status-message");
     statusEl.textContent = "Saving map...";
 
-    // Try slam_toolbox serialize first (most common for SLAM mode)
-    try {
-      await RosBridge.callService(
-        "/slam_toolbox/serialize_state",
-        "slam_toolbox/srv/SerializePoseGraph",
-        { filename: "map" }
-      );
-      statusEl.textContent = "Map serialized via slam_toolbox";
-      return;
-    } catch (_) { /* try next */ }
+    // Try ROS services first (rosbridge direct)
+    const services = [
+      { name: "/slam_toolbox/serialize_state", type: "slam_toolbox/srv/SerializePoseGraph", req: { filename: "map" }, label: "slam_toolbox serialize" },
+      { name: "/slam_toolbox/save_map", type: "slam_toolbox/srv/SaveMap", req: { name: { data: "map" } }, label: "slam_toolbox save_map" },
+      { name: "/map_saver/save_map", type: "nav2_msgs/srv/SaveMap", req: { map_url: "map", image_format: "pgm" }, label: "nav2 map_saver" },
+    ];
 
-    // Fallback: slam_toolbox save_map
-    try {
-      await RosBridge.callService(
-        "/slam_toolbox/save_map",
-        "slam_toolbox/srv/SaveMap",
-        { name: { data: "map" } }
-      );
-      statusEl.textContent = "Map saved via slam_toolbox";
-      return;
-    } catch (_) { /* try next */ }
+    for (const svc of services) {
+      try {
+        await RosBridge.callService(svc.name, svc.type, svc.req);
+        statusEl.textContent = `Map saved via ${svc.label}`;
+        return;
+      } catch (_) { /* try next */ }
+    }
 
-    // Fallback: nav2 map_saver
+    // Fallback: call our backend which runs the CLI command
     try {
-      await RosBridge.callService(
-        "/map_saver/save_map",
-        "nav2_msgs/srv/SaveMap",
-        { map_url: "map", image_format: "pgm" }
-      );
-      statusEl.textContent = "Map saved via nav2 map_saver";
-      return;
-    } catch (_) { /* all failed */ }
-
-    statusEl.textContent = "Map save failed — no save service found. Run: ros2 run nav2_map_server map_saver_cli -f ~/map";
+      const resp = await fetch("/api/save_map", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "map" }),
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        statusEl.textContent = `Map saved to ${data.path} (${data.method})`;
+        return;
+      }
+      statusEl.textContent = `Map save failed: ${data.error}`;
+    } catch (err) {
+      statusEl.textContent = `Map save failed: ${err.message}`;
+    }
   });
 
   // ---- Node health check ------------------------------------------------

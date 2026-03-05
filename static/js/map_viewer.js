@@ -204,17 +204,17 @@ const MapViewer = (() => {
       const val = data[i];
       const idx = i * 4;
       if (val === -1) {
-        // Unknown – RViz default gray (#696969)
-        imgData.data[idx]     = 105;
-        imgData.data[idx + 1] = 105;
-        imgData.data[idx + 2] = 105;
-      } else if (val === 0) {
-        // Free space – white/near-white like RViz
+        // Unknown – RViz default gray
+        imgData.data[idx]     = 205;
+        imgData.data[idx + 1] = 205;
+        imgData.data[idx + 2] = 205;
+      } else if (val <= 50) {
+        // Free / low probability – white (RViz uses threshold ~65)
         imgData.data[idx]     = 254;
         imgData.data[idx + 1] = 254;
         imgData.data[idx + 2] = 254;
       } else {
-        // Occupied – solid black (any occupancy > 0)
+        // Occupied – solid black
         imgData.data[idx]     = 0;
         imgData.data[idx + 1] = 0;
         imgData.data[idx + 2] = 0;

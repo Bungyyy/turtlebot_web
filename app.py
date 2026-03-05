@@ -7,7 +7,9 @@ all ROS topic/service communication.
 """
 
 import os
+import subprocess
 import threading
+from pathlib import Path
 from flask import Flask, render_template, Response, jsonify, request
 from flask_socketio import SocketIO
 from flask_cors import CORS
@@ -46,6 +48,56 @@ def config():
             "rosbridge_port": ROSBRIDGE_PORT,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Map save endpoint
+# ---------------------------------------------------------------------------
+MAP_SAVE_DIR = os.environ.get("MAP_SAVE_DIR", os.path.expanduser("~/maps"))
+
+
+@app.route("/api/save_map", methods=["POST"])
+def save_map():
+    """Save the current map using ros2 map_saver_cli."""
+    data = request.get_json(silent=True) or {}
+    name = data.get("name", "map")
+
+    # Sanitise filename
+    safe_name = "".join(c for c in name if c.isalnum() or c in "-_")
+    if not safe_name:
+        safe_name = "map"
+
+    Path(MAP_SAVE_DIR).mkdir(parents=True, exist_ok=True)
+    filepath = os.path.join(MAP_SAVE_DIR, safe_name)
+
+    # Try map_saver_cli (Nav2)
+    try:
+        result = subprocess.run(
+            ["ros2", "run", "nav2_map_server", "map_saver_cli",
+             "-f", filepath, "--ros-args", "-p", "save_map_timeout:=10.0"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            return jsonify({"ok": True, "path": filepath, "method": "map_saver_cli"})
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Fallback: try saving via ros2 service call to slam_toolbox
+    try:
+        result = subprocess.run(
+            ["ros2", "service", "call",
+             "/slam_toolbox/save_map",
+             "slam_toolbox/srv/SaveMap",
+             f'{{"name": {{"data": "{filepath}"}}}}'
+             ],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            return jsonify({"ok": True, "path": filepath, "method": "slam_toolbox"})
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    return jsonify({"ok": False, "error": "No map saver available. Ensure nav2_map_server or slam_toolbox is running."}), 500
 
 
 # ---------------------------------------------------------------------------
