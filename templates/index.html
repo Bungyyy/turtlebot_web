@@ -205,7 +205,71 @@
     <!-- TAB: SETTINGS                   -->
     <!-- =============================== -->
     <section id="tab-settings" class="tab-panel">
-      <div class="settings-container">
+      <div class="settings-container settings-wide">
+
+        <!-- ======= LAUNCH MANAGER ======= -->
+        <div class="card card-launch-manager">
+          <div class="card-header"><h3>Launch Manager</h3></div>
+          <p class="lm-desc">Start and stop ROS2 processes from here. No terminal needed.</p>
+
+          <!-- Rosbridge -->
+          <div class="lm-row" id="lm-rosbridge">
+            <div class="lm-indicator stopped"></div>
+            <div class="lm-info">
+              <div class="lm-name">ROS Bridge</div>
+              <div class="lm-status-text">Stopped</div>
+            </div>
+            <button class="btn-action btn-primary" data-launch="rosbridge">Start</button>
+          </div>
+
+          <!-- Robot Bringup -->
+          <div class="lm-row" id="lm-bringup">
+            <div class="lm-indicator stopped"></div>
+            <div class="lm-info">
+              <div class="lm-name">Robot Bringup</div>
+              <div class="lm-status-text">Stopped</div>
+            </div>
+            <button class="btn-action btn-primary" data-launch="bringup">Start</button>
+          </div>
+          <div class="lm-sub-row">
+            <label>SSH Host (e.g. ubuntu@192.168.1.10)</label>
+            <input type="text" id="lm-ssh-host" placeholder="ubuntu@192.168.1.10" />
+          </div>
+
+          <!-- SLAM -->
+          <div class="lm-row" id="lm-slam">
+            <div class="lm-indicator stopped"></div>
+            <div class="lm-info">
+              <div class="lm-name">SLAM Mapping</div>
+              <div class="lm-status-text">Stopped</div>
+            </div>
+            <button class="btn-action btn-primary" data-launch="slam">Start</button>
+          </div>
+
+          <!-- Save Map -->
+          <div class="lm-sub-row lm-save-row">
+            <input type="text" id="lm-map-name" placeholder="my_map" value="map" />
+            <button id="btn-lm-save-map" class="btn-action btn-primary">Save Map</button>
+          </div>
+
+          <!-- Navigation -->
+          <div class="lm-row" id="lm-navigation">
+            <div class="lm-indicator stopped"></div>
+            <div class="lm-info">
+              <div class="lm-name">Navigation</div>
+              <div class="lm-status-text">Stopped</div>
+            </div>
+            <button class="btn-action btn-primary" data-launch="navigation">Start</button>
+          </div>
+          <div class="lm-sub-row">
+            <label>Map File</label>
+            <select id="lm-map-select">
+              <option value="">-- Select a map --</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- ======= CONNECTION SETTINGS ======= -->
         <div class="card">
           <div class="card-header"><h3>Connection Settings</h3></div>
           <div class="form-group">
@@ -218,8 +282,14 @@
           </div>
           <button id="btn-reconnect" class="btn-action btn-primary">Reconnect</button>
         </div>
+
+        <!-- ======= ROBOT PARAMS ======= -->
         <div class="card">
           <div class="card-header"><h3>Robot Parameters</h3></div>
+          <div class="form-group">
+            <label>TurtleBot3 Model</label>
+            <input type="text" id="setting-model" value="{{ turtlebot3_model }}" disabled />
+          </div>
           <div class="form-group">
             <label>Max Linear Velocity (m/s)</label>
             <input type="number" id="setting-max-linear" value="0.22" step="0.01" />
@@ -260,6 +330,7 @@
   <script src="{{ url_for('static', filename='js/controls.js') }}"></script>
   <script src="{{ url_for('static', filename='js/waypoints.js') }}"></script>
   <script src="{{ url_for('static', filename='js/camera.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/launch_manager.js') }}"></script>
   <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>

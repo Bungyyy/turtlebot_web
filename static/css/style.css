@@ -522,6 +522,89 @@ html, body {
   max-width: 500px;
 }
 
+.settings-wide { max-width: 600px; }
+
+/* ---------- Launch Manager ---------- */
+.card-launch-manager {
+  border-color: var(--accent-blue);
+}
+
+.lm-desc {
+  padding: 8px 14px 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.lm-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.lm-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.lm-indicator.stopped { background: var(--accent-red); }
+.lm-indicator.running { background: var(--accent-green); }
+
+.lm-info { flex: 1; }
+
+.lm-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.lm-status-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: 'Courier New', monospace;
+}
+
+.lm-sub-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px 6px 36px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.lm-sub-row label { min-width: 80px; font-weight: 600; }
+
+.lm-sub-row input,
+.lm-sub-row select {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.lm-save-row {
+  gap: 6px;
+}
+
+.lm-save-row input { max-width: 160px; }
+
+.btn-stop-proc {
+  background: var(--accent-red) !important;
+  border-color: var(--accent-red) !important;
+  color: #fff !important;
+}
+
+.btn-stop-proc:hover {
+  background: #dc2626 !important;
+}
+
 .form-group {
   padding: 8px 14px;
   display: flex;

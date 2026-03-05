@@ -3,7 +3,7 @@
  * Wires together all modules and handles tab switching.
  */
 
-/* global RosBridge, MapViewer, Controls, Waypoints, Camera */
+/* global RosBridge, MapViewer, Controls, Waypoints, Camera, LaunchManager */
 
 (function () {
   "use strict";
@@ -29,6 +29,7 @@
   Controls.init();
   Waypoints.init();
   Camera.init();
+  LaunchManager.init();
 
   // ---- ROS Connection ---------------------------------------------------
 
@@ -89,15 +90,41 @@
 
   // ---- Mode buttons -----------------------------------------------------
 
-  document.getElementById("btn-nav-mode").addEventListener("click", () => {
+  document.getElementById("btn-nav-mode").addEventListener("click", async () => {
     document.getElementById("btn-nav-mode").classList.add("active");
     document.getElementById("btn-slam-mode").classList.remove("active");
+
+    // Stop SLAM if running, start Navigation
+    if (LaunchManager.isRunning("slam")) {
+      document.getElementById("status-message").textContent = "Stopping SLAM...";
+      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "slam" }) });
+    }
+
+    if (!LaunchManager.isRunning("navigation")) {
+      document.getElementById("status-message").textContent = "Starting Navigation...";
+      const mapSelect = document.getElementById("lm-map-select");
+      const args = mapSelect && mapSelect.value ? [`map:=${mapSelect.value}`] : [];
+      await fetch("/api/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "navigation", args }) });
+    }
+
     document.getElementById("status-message").textContent = "Mode: Navigation";
   });
 
-  document.getElementById("btn-slam-mode").addEventListener("click", () => {
+  document.getElementById("btn-slam-mode").addEventListener("click", async () => {
     document.getElementById("btn-slam-mode").classList.add("active");
     document.getElementById("btn-nav-mode").classList.remove("active");
+
+    // Stop Navigation if running, start SLAM
+    if (LaunchManager.isRunning("navigation")) {
+      document.getElementById("status-message").textContent = "Stopping Navigation...";
+      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "navigation" }) });
+    }
+
+    if (!LaunchManager.isRunning("slam")) {
+      document.getElementById("status-message").textContent = "Starting SLAM...";
+      await fetch("/api/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "slam" }) });
+    }
+
     document.getElementById("status-message").textContent = "Mode: SLAM";
   });
 

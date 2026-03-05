@@ -4,11 +4,16 @@
 Serves the web UI and proxies the camera feed from ROS.
 The frontend connects directly to rosbridge_websocket for
 all ROS topic/service communication.
+
+Includes a Launch Manager for starting/stopping ROS2 processes
+(bringup, SLAM, navigation, rosbridge) from the web UI.
 """
 
 import os
+import signal
 import subprocess
 import threading
+import glob as globmod
 from pathlib import Path
 from flask import Flask, render_template, Response, jsonify, request
 from flask_socketio import SocketIO
@@ -24,6 +29,140 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 ROSBRIDGE_HOST = os.environ.get("ROSBRIDGE_HOST", "localhost")
 ROSBRIDGE_PORT = int(os.environ.get("ROSBRIDGE_PORT", 9090))
 WEB_PORT = int(os.environ.get("WEB_PORT", 5000))
+TURTLEBOT3_MODEL = os.environ.get("TURTLEBOT3_MODEL", "burger")
+MAP_SAVE_DIR = os.environ.get("MAP_SAVE_DIR", os.path.expanduser("~/maps"))
+
+# ---------------------------------------------------------------------------
+# Process Manager — launch / stop ROS2 processes from the web UI
+# ---------------------------------------------------------------------------
+_processes = {}   # name -> { "proc": Popen, "cmd": str, "log": list }
+_proc_lock = threading.Lock()
+
+
+def _build_env():
+    """Build environment with TURTLEBOT3_MODEL set."""
+    env = os.environ.copy()
+    env["TURTLEBOT3_MODEL"] = TURTLEBOT3_MODEL
+    return env
+
+
+# Map of process names to their launch commands
+LAUNCH_COMMANDS = {
+    "rosbridge": [
+        "ros2", "launch", "rosbridge_server",
+        "rosbridge_websocket_launch.xml",
+    ],
+    "bringup": [
+        "ros2", "launch", "turtlebot3_bringup", "robot.launch.py",
+    ],
+    "slam": [
+        "ros2", "launch", "turtlebot3_cartographer", "cartographer.launch.py",
+    ],
+    "navigation": [
+        "ros2", "launch", "turtlebot3_navigation2", "navigation2.launch.py",
+        # map:= argument is appended dynamically
+    ],
+}
+
+
+def _launch_process(name, extra_args=None, ssh_host=None):
+    """Launch a ROS2 process by name. Returns (ok, message)."""
+    with _proc_lock:
+        if name in _processes and _processes[name]["proc"].poll() is None:
+            return False, f"{name} is already running"
+
+    cmd = list(LAUNCH_COMMANDS.get(name, []))
+    if not cmd:
+        return False, f"Unknown process: {name}"
+
+    if extra_args:
+        cmd.extend(extra_args)
+
+    # If SSH host is specified, wrap the command
+    if ssh_host:
+        remote_cmd = " ".join(cmd)
+        cmd = ["ssh", "-o", "StrictHostKeyChecking=no", ssh_host, remote_cmd]
+
+    try:
+        env = _build_env()
+        proc = subprocess.Popen(
+            cmd, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            preexec_fn=os.setsid,  # new process group for clean kill
+        )
+        log_lines = []
+
+        # Background thread to capture output
+        def _reader():
+            try:
+                for line in iter(proc.stdout.readline, b""):
+                    decoded = line.decode("utf-8", errors="replace").rstrip()
+                    log_lines.append(decoded)
+                    if len(log_lines) > 200:
+                        log_lines.pop(0)
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_reader, daemon=True)
+        t.start()
+
+        with _proc_lock:
+            _processes[name] = {"proc": proc, "cmd": " ".join(cmd), "log": log_lines}
+
+        return True, f"{name} launched (PID {proc.pid})"
+
+    except FileNotFoundError:
+        return False, f"Command not found: {cmd[0]}"
+    except Exception as e:
+        return False, str(e)
+
+
+def _stop_process(name):
+    """Stop a running process. Returns (ok, message)."""
+    with _proc_lock:
+        info = _processes.get(name)
+        if not info or info["proc"].poll() is not None:
+            _processes.pop(name, None)
+            return False, f"{name} is not running"
+
+    try:
+        # Kill the entire process group
+        os.killpg(os.getpgid(info["proc"].pid), signal.SIGTERM)
+        info["proc"].wait(timeout=5)
+    except Exception:
+        try:
+            os.killpg(os.getpgid(info["proc"].pid), signal.SIGKILL)
+        except Exception:
+            pass
+
+    with _proc_lock:
+        _processes.pop(name, None)
+
+    return True, f"{name} stopped"
+
+
+def _process_status():
+    """Get status of all managed processes."""
+    status = {}
+    with _proc_lock:
+        for name, info in list(_processes.items()):
+            running = info["proc"].poll() is None
+            status[name] = {
+                "running": running,
+                "pid": info["proc"].pid,
+                "cmd": info["cmd"],
+                "log": info["log"][-20:],  # last 20 lines
+            }
+            if not running:
+                _processes.pop(name, None)
+
+    # Also report processes we know about but aren't running
+    for name in LAUNCH_COMMANDS:
+        if name not in status:
+            status[name] = {"running": False, "pid": None, "cmd": "", "log": []}
+
+    return status
+
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -36,24 +175,85 @@ def index():
         "index.html",
         rosbridge_host=ROSBRIDGE_HOST,
         rosbridge_port=ROSBRIDGE_PORT,
+        turtlebot3_model=TURTLEBOT3_MODEL,
     )
 
 
 @app.route("/api/config")
 def config():
     """Return current server configuration."""
-    return jsonify(
-        {
-            "rosbridge_host": ROSBRIDGE_HOST,
-            "rosbridge_port": ROSBRIDGE_PORT,
-        }
-    )
+    return jsonify({
+        "rosbridge_host": ROSBRIDGE_HOST,
+        "rosbridge_port": ROSBRIDGE_PORT,
+        "turtlebot3_model": TURTLEBOT3_MODEL,
+        "map_save_dir": MAP_SAVE_DIR,
+    })
 
 
 # ---------------------------------------------------------------------------
-# Map save endpoint
+# Launch Manager API
 # ---------------------------------------------------------------------------
-MAP_SAVE_DIR = os.environ.get("MAP_SAVE_DIR", os.path.expanduser("~/maps"))
+
+@app.route("/api/processes", methods=["GET"])
+def get_processes():
+    """Get status of all managed processes."""
+    return jsonify(_process_status())
+
+
+@app.route("/api/launch", methods=["POST"])
+def launch_process():
+    """Launch a ROS2 process."""
+    data = request.get_json(silent=True) or {}
+    name = data.get("name", "")
+    extra_args = data.get("args", [])
+    ssh_host = data.get("ssh_host")
+
+    if not name:
+        return jsonify({"ok": False, "error": "Missing process name"}), 400
+
+    ok, msg = _launch_process(name, extra_args, ssh_host)
+    return jsonify({"ok": ok, "message": msg}), 200 if ok else 409
+
+
+@app.route("/api/stop", methods=["POST"])
+def stop_process():
+    """Stop a running process."""
+    data = request.get_json(silent=True) or {}
+    name = data.get("name", "")
+
+    if not name:
+        return jsonify({"ok": False, "error": "Missing process name"}), 400
+
+    ok, msg = _stop_process(name)
+    return jsonify({"ok": ok, "message": msg}), 200 if ok else 409
+
+
+@app.route("/api/process_log/<name>", methods=["GET"])
+def process_log(name):
+    """Get recent log output for a process."""
+    with _proc_lock:
+        info = _processes.get(name)
+        if not info:
+            return jsonify({"log": [], "running": False})
+        return jsonify({
+            "log": info["log"][-50:],
+            "running": info["proc"].poll() is None,
+        })
+
+
+# ---------------------------------------------------------------------------
+# Map management
+# ---------------------------------------------------------------------------
+
+@app.route("/api/maps", methods=["GET"])
+def list_maps():
+    """List saved map files."""
+    Path(MAP_SAVE_DIR).mkdir(parents=True, exist_ok=True)
+    maps = []
+    for f in sorted(globmod.glob(os.path.join(MAP_SAVE_DIR, "*.yaml"))):
+        name = os.path.splitext(os.path.basename(f))[0]
+        maps.append({"name": name, "path": f})
+    return jsonify({"maps": maps, "dir": MAP_SAVE_DIR})
 
 
 @app.route("/api/save_map", methods=["POST"])
@@ -148,4 +348,6 @@ def handle_disconnect():
 if __name__ == "__main__":
     print(f"[WebUI] Starting on http://0.0.0.0:{WEB_PORT}")
     print(f"[WebUI] Expecting rosbridge at ws://{ROSBRIDGE_HOST}:{ROSBRIDGE_PORT}")
+    print(f"[WebUI] TurtleBot3 model: {TURTLEBOT3_MODEL}")
+    print(f"[WebUI] Map save dir: {MAP_SAVE_DIR}")
     socketio.run(app, host="0.0.0.0", port=WEB_PORT, debug=True)
