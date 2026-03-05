@@ -340,6 +340,9 @@
     } else if (LaunchManager.isRunning("navigation")) {
       _updateStepBadge("step2-badge", "Nav", "badge-nav");
     }
+
+    // Refresh node status indicators
+    if (RosBridge.isConnected()) _checkNodes();
   }, 3000);
 
   // ---- Node health check ------------------------------------------------
@@ -348,7 +351,10 @@
     RosBridge.callService("/rosapi/nodes", "rosapi/srv/Nodes", {})
       .then((result) => {
         const nodes = result.nodes || [];
-        setNodeStatus("node-turtlebot", nodes.some((n) => n.includes("turtlebot")));
+        setNodeStatus("node-turtlebot", nodes.some((n) =>
+          n.includes("turtlebot") || n.includes("diff_drive") ||
+          n.includes("robot_state_publisher")
+        ));
         setNodeStatus("node-slam", nodes.some((n) =>
           n.includes("slam") || n.includes("cartographer") ||
           n.includes("gmapping") || n.includes("map_server") || n.includes("amcl")
