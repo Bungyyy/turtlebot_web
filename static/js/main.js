@@ -33,6 +33,7 @@
   // ---- ROS Connection ---------------------------------------------------
 
   const badge = document.getElementById("ros-connection-badge");
+  let reconnectTimer = null;
 
   function setNodeStatus(nodeId, online) {
     const el = document.getElementById(nodeId);
@@ -41,6 +42,9 @@
   }
 
   RosBridge.on("connect", () => {
+    // Clear any pending reconnect timer
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+
     badge.textContent = "ROS Connected";
     badge.className = "badge badge-connected";
     setNodeStatus("node-rosbridge", true);
@@ -61,8 +65,9 @@
       .forEach((id) => setNodeStatus(id, false));
     document.getElementById("status-message").textContent = "Disconnected – reconnecting...";
 
-    // Auto-reconnect after 3 s
-    setTimeout(() => _connect(), 3000);
+    // Auto-reconnect after 3 s (clear any existing timer first)
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; _connect(); }, 3000);
   });
 
   RosBridge.on("error", () => {

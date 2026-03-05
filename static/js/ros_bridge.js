@@ -16,6 +16,8 @@ const RosBridge = (() => {
 
   function connect(host, port) {
     if (ros) {
+      // Suppress the "close" event so it doesn't trigger auto-reconnect
+      ros.removeAllListeners();
       ros.close();
     }
 
