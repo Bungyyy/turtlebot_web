@@ -74,7 +74,8 @@ def _launch_process(name, extra_args=None, ssh_host=None):
     is executed on the remote machine via SSH.
     """
     with _proc_lock:
-        if name in _processes and _processes[name]["proc"].poll() is None:
+        existing = _processes.get(name)
+        if existing and existing["proc"].poll() is None:
             return False, f"{name} is already running"
 
     cmd = list(LAUNCH_COMMANDS.get(name, []))
@@ -153,8 +154,7 @@ def _stop_process(name):
         except Exception:
             pass
 
-    with _proc_lock:
-        _processes.pop(name, None)
+    # Don't remove from _processes — keep the log accessible
 
     return True, f"{name} stopped"
 
@@ -171,8 +171,7 @@ def _process_status():
                 "cmd": info["cmd"],
                 "log": info["log"][-20:],  # last 20 lines
             }
-            if not running:
-                _processes.pop(name, None)
+            # Keep stopped processes so their logs remain accessible
 
     # Also report processes we know about but aren't running
     for name in LAUNCH_COMMANDS:

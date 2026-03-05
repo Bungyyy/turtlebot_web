@@ -178,21 +178,26 @@
     }
   });
 
+  let _lastLaunchedProcess = "bringup";
+
   async function _pollLog() {
-    // Show log for whichever process is most relevant
-    for (const name of ["bringup", "rosbridge", "slam", "navigation"]) {
-      if (LaunchManager.isRunning(name)) {
-        try {
-          const data = await (await fetch(`/api/process_log/${name}`)).json();
-          if (data.log && data.log.length > 0) {
-            logEl.textContent = `[${name}]\n` + data.log.join("\n");
-            logEl.scrollTop = logEl.scrollHeight;
-            return;
-          }
-        } catch (_) {}
-      }
+    // Show log for the last launched process first (even if stopped/failed)
+    const order = [_lastLaunchedProcess, "slam", "navigation", "bringup", "rosbridge"];
+    const seen = new Set();
+    for (const name of order) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      try {
+        const data = await (await fetch(`/api/process_log/${name}`)).json();
+        if (data.log && data.log.length > 0) {
+          const status = data.running ? "running" : "STOPPED";
+          logEl.textContent = `[${name}] (${status})\n` + data.log.join("\n");
+          logEl.scrollTop = logEl.scrollHeight;
+          return;
+        }
+      } catch (_) {}
     }
-    logEl.textContent = "(no running process log)";
+    logEl.textContent = "(no process log available)";
   }
 
   // ---- STEP 2: Mode (SLAM / Navigation) ---------------------------------
@@ -223,6 +228,7 @@
 
     _showModeUI("slam");
     _setStatus("Starting SLAM...");
+    _lastLaunchedProcess = "slam";
 
     // Stop Navigation if running
     if (LaunchManager.isRunning("navigation")) {
@@ -264,6 +270,7 @@
 
     _showModeUI("navigation");
     _setStatus("Starting Navigation...");
+    _lastLaunchedProcess = "navigation";
 
     // Stop SLAM if running
     if (LaunchManager.isRunning("slam")) {
