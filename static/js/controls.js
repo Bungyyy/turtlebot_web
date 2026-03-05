@@ -49,6 +49,8 @@ const Controls = (() => {
   }
 
   function start() {
+    // Clean up previous publisher/interval (handles reconnect)
+    if (publishInterval) { clearInterval(publishInterval); publishInterval = null; }
     cmdVelTopic = RosBridge.advertise("/cmd_vel", "geometry_msgs/msg/Twist");
     // Publish at ~10 Hz while moving
     publishInterval = setInterval(() => {

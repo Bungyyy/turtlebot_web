@@ -50,6 +50,7 @@ const MapViewer = (() => {
   let isDragging = false, dragStart = { x: 0, y: 0 }, dragMoved = false;
 
   let interactionMode = null;
+  let activeSubs = [];  // track subscriptions for cleanup on reconnect
 
   // ---- Initialisation ---------------------------------------------------
 
@@ -78,17 +79,21 @@ const MapViewer = (() => {
   }
 
   function subscribeTopics() {
+    // Unsubscribe old topics (handles reconnect)
+    activeSubs.forEach((t) => { try { t.unsubscribe(); } catch (_) {} });
+    activeSubs = [];
+
     // OccupancyGrid
-    RosBridge.subscribe("/map", "nav_msgs/msg/OccupancyGrid", (msg) => {
+    activeSubs.push(RosBridge.subscribe("/map", "nav_msgs/msg/OccupancyGrid", (msg) => {
       mapData = msg;
       _buildMapImage(msg);
       _render();
       document.getElementById("map-resolution").textContent = `Res: ${msg.info.resolution.toFixed(3)} m/px`;
       document.getElementById("map-size").textContent = `Size: ${msg.info.width}x${msg.info.height}`;
-    }, { throttle: 2000 });
+    }, { throttle: 2000 }));
 
     // Robot pose (AMCL — in MAP frame, authoritative for position on map)
-    RosBridge.subscribe("/amcl_pose", "geometry_msgs/msg/PoseWithCovarianceStamped", (msg) => {
+    activeSubs.push(RosBridge.subscribe("/amcl_pose", "geometry_msgs/msg/PoseWithCovarianceStamped", (msg) => {
       const p = msg.pose.pose;
       const yaw = _quaternionToYaw(p.orientation);
       robotPose = { x: p.position.x, y: p.position.y, theta: yaw };
@@ -96,10 +101,10 @@ const MapViewer = (() => {
       _pushTrail(robotPose);
       _updatePoseUI(p);
       _render();
-    }, { throttle: 100 });
+    }, { throttle: 100 }));
 
     // Odom — in ODOM frame; convert to map frame via TF when AMCL is not available
-    RosBridge.subscribe("/odom", "nav_msgs/msg/Odometry", (msg) => {
+    activeSubs.push(RosBridge.subscribe("/odom", "nav_msgs/msg/Odometry", (msg) => {
       const p = msg.pose.pose;
       const yaw = _quaternionToYaw(p.orientation);
       odomPose = { x: p.position.x, y: p.position.y, theta: yaw };
@@ -109,10 +114,10 @@ const MapViewer = (() => {
       }
       _pushTrail(robotPose);
       _render();
-    }, { throttle: 100 });
+    }, { throttle: 100 }));
 
     // TF — listen for map→odom transform to correctly place robot on map
-    RosBridge.subscribe("/tf", "tf2_msgs/msg/TFMessage", (msg) => {
+    activeSubs.push(RosBridge.subscribe("/tf", "tf2_msgs/msg/TFMessage", (msg) => {
       const transforms = msg.transforms || [];
       for (const t of transforms) {
         const parent = t.header.frame_id.replace(/^\//, "");
@@ -126,34 +131,34 @@ const MapViewer = (() => {
           };
         }
       }
-    }, { throttle: 200 });
+    }, { throttle: 200 }));
 
     // LaserScan
-    RosBridge.subscribe("/scan", "sensor_msgs/msg/LaserScan", (msg) => {
+    activeSubs.push(RosBridge.subscribe("/scan", "sensor_msgs/msg/LaserScan", (msg) => {
       _processLaserScan(msg);
       _render();
-    }, { throttle: 150 });
+    }, { throttle: 150 }));
 
     // Navigation plan path
-    RosBridge.subscribe("/plan", "nav_msgs/msg/Path", (msg) => {
+    activeSubs.push(RosBridge.subscribe("/plan", "nav_msgs/msg/Path", (msg) => {
       navPath = (msg.poses || []).map((ps) => ({
         x: ps.pose.position.x,
         y: ps.pose.position.y,
       }));
       _render();
-    }, { throttle: 500 });
+    }, { throttle: 500 }));
 
     // Also try /received_global_plan (Nav2 controller)
-    RosBridge.subscribe("/received_global_plan", "nav_msgs/msg/Path", (msg) => {
+    activeSubs.push(RosBridge.subscribe("/received_global_plan", "nav_msgs/msg/Path", (msg) => {
       navPath = (msg.poses || []).map((ps) => ({
         x: ps.pose.position.x,
         y: ps.pose.position.y,
       }));
       _render();
-    }, { throttle: 500 });
+    }, { throttle: 500 }));
 
     // Local costmap
-    RosBridge.subscribe(
+    activeSubs.push(RosBridge.subscribe(
       "/local_costmap/costmap",
       "nav_msgs/msg/OccupancyGrid",
       (msg) => {
@@ -162,10 +167,10 @@ const MapViewer = (() => {
         _render();
       },
       { throttle: 1000 }
-    );
+    ));
 
     // Nav2 status – clear goal on success
-    RosBridge.subscribe(
+    activeSubs.push(RosBridge.subscribe(
       "/navigate_to_pose/_action/status",
       "action_msgs/msg/GoalStatusArray",
       (msg) => {
@@ -178,7 +183,7 @@ const MapViewer = (() => {
         }
       },
       { throttle: 1000 }
-    );
+    ));
   }
 
   // ---- Odom trail -------------------------------------------------------

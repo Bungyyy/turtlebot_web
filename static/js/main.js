@@ -60,6 +60,7 @@
     badge.className = "badge badge-disconnected";
     ["node-rosbridge", "node-turtlebot", "node-slam", "node-navigation", "node-camera"]
       .forEach((id) => setNodeStatus(id, false));
+    Controls.stop();
     _setStatus("Disconnected – reconnecting...");
 
     if (reconnectTimer) clearTimeout(reconnectTimer);
