@@ -110,7 +110,10 @@
 
   document.getElementById("btn-navigate").addEventListener("click", () => {
     MapViewer.setMode("navigate");
-    document.getElementById("status-message").textContent = "Click on the map to set navigation goal";
+    const navNode = document.getElementById("node-navigation");
+    const navOk = navNode && navNode.classList.contains("online");
+    const hint = navOk ? "" : " (Nav2 not detected — launch navigation first)";
+    document.getElementById("status-message").textContent = "Click on the map to set navigation goal" + hint;
   });
 
   document.getElementById("btn-manual").addEventListener("click", (e) => {
@@ -165,8 +168,16 @@
       .then((result) => {
         const nodes = result.nodes || [];
         setNodeStatus("node-turtlebot", nodes.some((n) => n.includes("turtlebot")));
-        setNodeStatus("node-slam", nodes.some((n) => n.includes("slam") || n.includes("cartographer") || n.includes("gmapping")));
-        setNodeStatus("node-navigation", nodes.some((n) => n.includes("move_base") || n.includes("nav2") || n.includes("navigation")));
+        setNodeStatus("node-slam", nodes.some((n) =>
+          n.includes("slam") || n.includes("cartographer") ||
+          n.includes("gmapping") || n.includes("map_server") || n.includes("amcl")
+        ));
+        setNodeStatus("node-navigation", nodes.some((n) =>
+          n.includes("bt_navigator") || n.includes("controller_server") ||
+          n.includes("planner_server") || n.includes("nav2") ||
+          n.includes("navigation") || n.includes("move_base") ||
+          n.includes("lifecycle_manager_navigation") || n.includes("behavior_server")
+        ));
         setNodeStatus("node-camera", nodes.some((n) => n.includes("camera") || n.includes("image") || n.includes("astra")));
       })
       .catch(() => {

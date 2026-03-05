@@ -767,18 +767,35 @@ const MapViewer = (() => {
     canvas.style.cursor = "grab";
   }
 
-  function _sendNavGoal(x, y) {
+  function _sendNavGoal(x, y, oz, ow) {
     goalPose = { x, y };
     _render();
 
-    RosBridge.publish("/goal_pose", "geometry_msgs/msg/PoseStamped", {
-      header: { frame_id: "map" },
+    const poseMsg = {
+      header: { frame_id: "map", stamp: { sec: 0, nanosec: 0 } },
       pose: {
         position: { x, y, z: 0 },
-        orientation: { x: 0, y: 0, z: 0, w: 1 },
+        orientation: { x: 0, y: 0, z: oz || 0, w: ow || 1 },
       },
-    });
-    _setStatus(`Navigation goal sent: (${x.toFixed(2)}, ${y.toFixed(2)})`);
+    };
+
+    // Publish to /goal_pose topic (bt_navigator listens here)
+    RosBridge.publish("/goal_pose", "geometry_msgs/msg/PoseStamped", poseMsg);
+
+    // Also try Nav2 action interface (more reliable)
+    try {
+      const actionClient = RosBridge.actionClient(
+        "/navigate_to_pose",
+        "nav2_msgs/action/NavigateToPose"
+      );
+      const goal = new ROSLIB.Goal({
+        actionClient,
+        goalMessage: { pose: poseMsg },
+      });
+      goal.send();
+    } catch (_) { /* action may not be available */ }
+
+    _setStatus(`Nav goal: (${x.toFixed(2)}, ${y.toFixed(2)})`);
   }
 
   function _sendInitialPose(x, y) {
@@ -796,15 +813,7 @@ const MapViewer = (() => {
   }
 
   function navigateTo(x, y, oz, ow) {
-    goalPose = { x, y };
-    _render();
-    RosBridge.publish("/goal_pose", "geometry_msgs/msg/PoseStamped", {
-      header: { frame_id: "map" },
-      pose: {
-        position: { x, y, z: 0 },
-        orientation: { x: 0, y: 0, z: oz || 0, w: ow || 1 },
-      },
-    });
+    _sendNavGoal(x, y, oz, ow);
   }
 
   // ---- Pan & Zoom -------------------------------------------------------
