@@ -11,7 +11,9 @@ const MapViewer = (() => {
   let canvas, ctx;
   let mapData = null;
   let mapImage = null;        // offscreen canvas for OccupancyGrid
-  let robotPose = null;       // { x, y, theta }
+  let robotPose = null;       // { x, y, theta } — best known pose in MAP frame
+  let odomPose = null;        // { x, y, theta } — pose in ODOM frame (fallback)
+  let hasAmcl = false;        // true once AMCL has published
   let goalPose = null;        // { x, y }
   let homePose = { x: 0, y: 0 };
 
@@ -84,23 +86,27 @@ const MapViewer = (() => {
       document.getElementById("map-size").textContent = `Size: ${msg.info.width}x${msg.info.height}`;
     }, { throttle: 2000 });
 
-    // Robot pose (AMCL)
+    // Robot pose (AMCL — in MAP frame, authoritative for position on map)
     RosBridge.subscribe("/amcl_pose", "geometry_msgs/msg/PoseWithCovarianceStamped", (msg) => {
       const p = msg.pose.pose;
       const yaw = _quaternionToYaw(p.orientation);
       robotPose = { x: p.position.x, y: p.position.y, theta: yaw };
+      hasAmcl = true;
       _pushTrail(robotPose);
       _updatePoseUI(p);
       _render();
     }, { throttle: 100 });
 
-    // Odom – always update pose + trail
+    // Odom — in ODOM frame; use as fallback when AMCL is not available (e.g. SLAM mode)
     RosBridge.subscribe("/odom", "nav_msgs/msg/Odometry", (msg) => {
       const p = msg.pose.pose;
       const yaw = _quaternionToYaw(p.orientation);
-      robotPose = { x: p.position.x, y: p.position.y, theta: yaw };
-      _pushTrail(robotPose);
-      _updatePoseUI(p);
+      odomPose = { x: p.position.x, y: p.position.y, theta: yaw };
+      if (!hasAmcl) {
+        robotPose = odomPose;
+        _updatePoseUI(p);
+      }
+      _pushTrail(robotPose || odomPose);
       _render();
     }, { throttle: 100 });
 
@@ -170,11 +176,12 @@ const MapViewer = (() => {
   // ---- Laser scan processing --------------------------------------------
 
   function _processLaserScan(msg) {
-    if (!robotPose) return;
+    const pose = robotPose || odomPose;
+    if (!pose) return;
     const pts = [];
     const { angle_min, angle_increment, ranges, range_min, range_max } = msg;
-    const cosR = Math.cos(robotPose.theta);
-    const sinR = Math.sin(robotPose.theta);
+    const cosR = Math.cos(pose.theta);
+    const sinR = Math.sin(pose.theta);
 
     // Downsample for performance (every 3rd ray)
     for (let i = 0; i < ranges.length; i += 3) {
@@ -185,8 +192,8 @@ const MapViewer = (() => {
       const ly = r * Math.sin(angle);
       // Transform to map frame
       pts.push({
-        x: robotPose.x + cosR * lx - sinR * ly,
-        y: robotPose.y + sinR * lx + cosR * ly,
+        x: pose.x + cosR * lx - sinR * ly,
+        y: pose.y + sinR * lx + cosR * ly,
       });
     }
     laserPoints = pts;
@@ -716,6 +723,7 @@ const MapViewer = (() => {
 
   function setMode(mode) {
     interactionMode = mode;
+    dragMoved = false;  // reset so stale drag state doesn't swallow clicks
     canvas.style.cursor = mode ? "crosshair" : "grab";
   }
 
