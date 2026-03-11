@@ -304,17 +304,27 @@ const MapViewer = (() => {
     const data = msg.data;
     const imgData = new ImageData(w, h);
 
+    // Log data encoding once for debugging
+    if (data.length > 0) {
+      const sample = [];
+      for (let j = 0; j < Math.min(20, data.length); j++) sample.push(data[j]);
+      console.log("[MapViewer] Map data sample (first 20):", sample,
+        "type:", typeof data[0], "isUint8Array:", data instanceof Uint8Array);
+    }
+
     for (let i = 0; i < data.length; i++) {
       const v = data[i], idx = i * 4;
-      if (v === -1) {
-        // Unknown: gray matching canvas background (like KraiPlatform)
-        imgData.data[idx] = 184; imgData.data[idx+1] = 184; imgData.data[idx+2] = 184;
-      } else if (v <= 50) {
+      // Handle both signed int8 (-1=unknown) and unsigned uint8 (255=unknown)
+      // Valid occupancy range: 0-100. Everything else = unknown.
+      if (v >= 0 && v <= 50) {
         // Free space: white
         imgData.data[idx] = 255; imgData.data[idx+1] = 255; imgData.data[idx+2] = 255;
-      } else {
+      } else if (v > 50 && v <= 100) {
         // Occupied: black
         imgData.data[idx] = 0; imgData.data[idx+1] = 0; imgData.data[idx+2] = 0;
+      } else {
+        // Unknown (-1 as int8, 255 as uint8, or any out-of-range): gray
+        imgData.data[idx] = 184; imgData.data[idx+1] = 184; imgData.data[idx+2] = 184;
       }
       imgData.data[idx+3] = 255;
     }
@@ -343,9 +353,10 @@ const MapViewer = (() => {
 
     for (let i = 0; i < data.length; i++) {
       const v = data[i], idx = i * 4;
-      if (v <= 0 || v === -1) { imgData.data[idx+3] = 0; continue; }
+      // Skip unknown/free: -1 (signed), 255 (unsigned), 0
+      if (v <= 0 || v === -1 || v === 255 || v > 100) { imgData.data[idx+3] = 0; continue; }
       // Lethal (100) - bright magenta/pink like RViz
-      if (v >= 100) { imgData.data[idx]=255; imgData.data[idx+1]=0; imgData.data[idx+2]=200; imgData.data[idx+3]=200; continue; }
+      if (v === 100) { imgData.data[idx]=255; imgData.data[idx+1]=0; imgData.data[idx+2]=200; imgData.data[idx+3]=200; continue; }
       // Inscribed (99) - purple
       if (v >= 99) { imgData.data[idx]=180; imgData.data[idx+1]=0; imgData.data[idx+2]=255; imgData.data[idx+3]=180; continue; }
       // Gradient: low=deep blue, mid=cyan, high=purple (matching RViz costmap2D)
@@ -473,7 +484,19 @@ const MapViewer = (() => {
     if (robotPose && mapData && layers.tf) _drawTFAxes(robotPose, "base_link");
     if (mapData && layers.tf) _drawTFAxes({ x:0, y:0, theta:0 }, "map");
 
-    // 11. Warning
+    // 11. Debug: show robot world coords on canvas
+    if (robotPose && mapData) {
+      const src = hasAmcl ? "AMCL" : (tfMapToOdom ? "odom+TF" : "odom");
+      const dbg = src + " (" + robotPose.x.toFixed(2) + ", " + robotPose.y.toFixed(2) + ") " +
+                  (robotPose.theta * 180 / Math.PI).toFixed(0) + "\u00b0";
+      ctx.save();
+      ctx.font = "bold 11px monospace";
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.fillText(dbg, 10, 20);
+      ctx.restore();
+    }
+
+    // 12. Warning
     if (!tfMapToOdom && !hasAmcl && odomPose && mapData) {
       ctx.fillStyle = "rgba(180,80,0,0.9)";
       ctx.font = "bold 11px monospace";
