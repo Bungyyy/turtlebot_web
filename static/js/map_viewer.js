@@ -278,11 +278,11 @@ const MapViewer = (() => {
     for (let i = 0; i < data.length; i++) {
       const v = data[i], idx = i * 4;
       if (v === -1) {
-        // Unknown: medium gray (like RViz)
-        imgData.data[idx] = 128; imgData.data[idx+1] = 128; imgData.data[idx+2] = 128;
+        // Unknown: gray matching canvas background (like KraiPlatform)
+        imgData.data[idx] = 184; imgData.data[idx+1] = 184; imgData.data[idx+2] = 184;
       } else if (v <= 50) {
-        // Free space: light gray/white
-        imgData.data[idx] = 240; imgData.data[idx+1] = 240; imgData.data[idx+2] = 240;
+        // Free space: white
+        imgData.data[idx] = 255; imgData.data[idx+1] = 255; imgData.data[idx+2] = 255;
       } else {
         // Occupied: black
         imgData.data[idx] = 0; imgData.data[idx+1] = 0; imgData.data[idx+2] = 0;
@@ -396,8 +396,8 @@ const MapViewer = (() => {
     const W = canvas.width, H = canvas.height;
     ctx.clearRect(0, 0, W, H);
 
-    // Dark gray background like RViz (48,48,48)
-    ctx.fillStyle = "#303030";
+    // Light gray background like KraiPlatform reference
+    ctx.fillStyle = "#b8b8b8";
     ctx.fillRect(0, 0, W, H);
 
     // 1. Occupancy grid
@@ -446,9 +446,9 @@ const MapViewer = (() => {
 
     // 11. Warning
     if (!tfMapToOdom && !hasAmcl && odomPose && mapData) {
-      ctx.fillStyle = "rgba(255,180,0,0.85)";
+      ctx.fillStyle = "rgba(180,80,0,0.9)";
       ctx.font = "bold 11px monospace";
-      ctx.fillText("No map\u2192odom TF \u2014 robot position approximate", 10, H - 10);
+      ctx.fillText("No map\u2192odom TF \u2014 robot position approximate", 10, H - 30);
     }
   }
 
@@ -459,7 +459,7 @@ const MapViewer = (() => {
     const pxPerMeter = scale / res;
     if (pxPerMeter < 15) return; // too zoomed out
 
-    ctx.strokeStyle = "rgba(0,0,0,0.08)";
+    ctx.strokeStyle = "rgba(0,0,0,0.12)";
     ctx.lineWidth = 0.5;
     const info = mapData.info;
     const mapWpx = info.width * scale, mapHpx = info.height * scale;
@@ -522,7 +522,7 @@ const MapViewer = (() => {
 
     if (label) {
       ctx.font = "10px monospace";
-      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.fillStyle = "rgba(0,0,0,0.7)";
       ctx.fillText(label, cx + 8, cy - 8);
     }
   }

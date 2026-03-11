@@ -423,7 +423,7 @@ select.input-sm { cursor: pointer; }
 #map-container {
   flex: 1;
   position: relative;
-  background: #111318;
+  background: #b8b8b8;
   overflow: hidden;
 }
 
@@ -438,12 +438,13 @@ select.input-sm { cursor: pointer; }
   position: absolute;
   top: 8px;
   right: 8px;
-  background: rgba(0,0,0,.82);
+  background: rgba(255,255,255,.88);
   padding: 8px 10px;
   border-radius: 6px;
   font-size: 11px;
   backdrop-filter: blur(6px);
-  border: 1px solid rgba(255,255,255,.08);
+  border: 1px solid rgba(0,0,0,.12);
+  color: #333;
   max-height: calc(100% - 60px);
   overflow-y: auto;
   z-index: 10;
@@ -453,7 +454,7 @@ select.input-sm { cursor: pointer; }
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: .8px;
-  color: var(--text-secondary);
+  color: #666;
   margin-bottom: 4px;
   font-weight: 700;
 }
@@ -468,7 +469,7 @@ select.input-sm { cursor: pointer; }
   user-select: none;
 }
 
-.legend-item:hover { color: #fff; }
+.legend-item:hover { color: #000; }
 
 .legend-item input[type="checkbox"] {
   width: 13px;
@@ -499,7 +500,40 @@ select.input-sm { cursor: pointer; }
   display: flex;
   gap: 16px;
   font-size: 11px;
+  color: #333;
+  background: rgba(255,255,255,0.7);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+/* ROS Nodes Bar (below map, like KraiPlatform) */
+#ros-nodes-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 6px 12px;
+  background: var(--bg-card);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
   color: var(--text-secondary);
+}
+
+.ros-node-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-red);
+  display: inline-block;
+}
+
+.ros-node-item.active .rn-dot {
+  background: var(--accent-green);
 }
 
 .map-toolbar {

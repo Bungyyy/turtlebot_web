@@ -349,26 +349,48 @@
 
   // ---- Node health check ------------------------------------------------
 
+  function _setRosNode(id, active) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle("active", active);
+  }
+
   function _checkNodes() {
     RosBridge.callService("/rosapi/nodes", "rosapi/srv/Nodes", {})
       .then((result) => {
         const nodes = result.nodes || [];
         console.log("[Main] ROS nodes:", nodes);
-        setNodeStatus("node-turtlebot", nodes.some((n) =>
+
+        const hasTurtlebot = nodes.some((n) =>
           n.includes("turtlebot") || n.includes("diff_drive") ||
           n.includes("robot_state_publisher")
-        ));
-        setNodeStatus("node-slam", nodes.some((n) =>
+        );
+        const hasSlam = nodes.some((n) =>
           n.includes("slam") || n.includes("cartographer") ||
-          n.includes("gmapping") || n.includes("map_server") || n.includes("amcl")
-        ));
-        setNodeStatus("node-navigation", nodes.some((n) =>
+          n.includes("gmapping")
+        );
+        const hasAmcl = nodes.some((n) => n.includes("amcl"));
+        const hasNav = nodes.some((n) =>
           n.includes("bt_navigator") || n.includes("controller_server") ||
           n.includes("planner_server") || n.includes("nav2") ||
           n.includes("navigation") || n.includes("move_base") ||
           n.includes("lifecycle_manager_navigation") || n.includes("behavior_server")
-        ));
-        setNodeStatus("node-camera", nodes.some((n) => n.includes("camera") || n.includes("image") || n.includes("astra")));
+        );
+        const hasMapServer = nodes.some((n) => n.includes("map_server"));
+        const hasCamera = nodes.some((n) => n.includes("camera") || n.includes("image") || n.includes("astra"));
+
+        // Footer status bar
+        setNodeStatus("node-turtlebot", hasTurtlebot);
+        setNodeStatus("node-slam", hasSlam || hasAmcl);
+        setNodeStatus("node-navigation", hasNav);
+        setNodeStatus("node-camera", hasCamera);
+
+        // Map node status bar (like KraiPlatform)
+        _setRosNode("rn-rosbridge", true); // if we're here, rosbridge is up
+        _setRosNode("rn-turtlebot", hasTurtlebot);
+        _setRosNode("rn-slam", hasSlam);
+        _setRosNode("rn-amcl", hasAmcl);
+        _setRosNode("rn-navigation", hasNav);
+        _setRosNode("rn-map-server", hasMapServer);
       })
       .catch((err) => {
         console.warn("[Main] Could not query /rosapi/nodes:", err);
