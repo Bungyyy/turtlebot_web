@@ -1,7 +1,7 @@
 /**
- * Map Viewer – RViz-style visualisation
- * Renders OccupancyGrid, robot model, TF frames, odom trail,
- * laser scan, navigation path, costmap overlay, and goal markers.
+ * Map Viewer – map-centric rendering.
+ * The occupancy grid auto-fits to fill the canvas.
+ * Robot, laser, path overlays are positioned using the map's coordinate system.
  */
 
 /* global RosBridge, ROSLIB */
@@ -10,56 +10,63 @@
 const MapViewer = (() => {
   let canvas, ctx;
   let mapData = null;
-  let mapImage = null;        // offscreen canvas for OccupancyGrid
-  let robotPose = null;       // { x, y, theta } — best known pose in MAP frame
-  let odomPose = null;        // { x, y, theta } — pose in ODOM frame
-  let hasAmcl = false;        // true once AMCL has published
-  let tfMapToOdom = null;     // { x, y, theta } — TF: map → odom transform
-  let goalPose = null;        // { x, y }
+  let mapImage = null;
+  let robotPose = null;       // { x, y, theta } in MAP frame
+  let odomPose = null;        // { x, y, theta } in ODOM frame
+  let hasAmcl = false;
+  let tfMapToOdom = null;     // { x, y, theta }
+  let goalPose = null;
   let homePose = { x: 0, y: 0 };
 
-  // Odom trail (ring buffer)
   const TRAIL_MAX = 600;
   let odomTrail = [];
   let lastTrailTime = 0;
-
-  // Laser scan points
-  let laserPoints = [];       // [{ x, y }, ...]
-
-  // Navigation path
-  let navPath = [];           // [{ x, y }, ...]
-
-  // Local costmap
+  let laserPoints = [];
+  let navPath = [];
   let costmapImage = null;
   let costmapData = null;
 
-  // Layer visibility (toggled from UI)
   let layers = {
-    map: true,
-    costmap: true,
-    laser: true,
-    path: true,
-    odom: true,
-    tf: true,
-    grid: true,
-    robot: true,
+    map: true, costmap: true, laser: true, path: true,
+    odom: true, tf: false, grid: true, robot: true,
   };
 
   let scale = 1.0;
   let panX = 0, panY = 0;
   let isDragging = false, dragStart = { x: 0, y: 0 }, dragMoved = false;
-  let autoCenteredOnce = false;   // auto-center on robot when first pose arrives
-
+  let autoFitted = false;
   let interactionMode = null;
-  let activeSubs = [];  // track subscriptions for cleanup on reconnect
+  let activeSubs = [];
 
-  // ---- Initialisation ---------------------------------------------------
+  // ---- Coordinate conversion --------------------------------------------
+  // World (meters) -> canvas pixels using map origin + resolution + view transform
+
+  function _worldToCanvas(wx, wy) {
+    if (!mapData) return { cx: 0, cy: 0 };
+    const info = mapData.info;
+    const col = (wx - info.origin.position.x) / info.resolution;
+    const row = info.height - (wy - info.origin.position.y) / info.resolution;
+    return { cx: col * scale + panX, cy: row * scale + panY };
+  }
+
+  function _canvasToWorld(cx, cy) {
+    if (!mapData) return { x: 0, y: 0 };
+    const info = mapData.info;
+    const col = (cx - panX) / scale;
+    const row = (cy - panY) / scale;
+    return {
+      x: info.origin.position.x + col * info.resolution,
+      y: info.origin.position.y + (info.height - row) * info.resolution,
+    };
+  }
+
+  // ---- Init -------------------------------------------------------------
 
   function init() {
     canvas = document.getElementById("map-canvas");
     ctx = canvas.getContext("2d");
     _resizeCanvas();
-    window.addEventListener("resize", _resizeCanvas);
+    window.addEventListener("resize", () => { _resizeCanvas(); if (autoFitted) _autoFit(); });
 
     canvas.addEventListener("mousedown", _onMouseDown);
     canvas.addEventListener("mousemove", _onMouseMove);
@@ -67,27 +74,17 @@ const MapViewer = (() => {
     canvas.addEventListener("wheel", _onWheel, { passive: false });
     canvas.addEventListener("click", _onClick);
 
-    document.getElementById("btn-zoom-in").addEventListener("click", () => { scale *= 1.25; _render(); });
-    document.getElementById("btn-zoom-out").addEventListener("click", () => { scale *= 0.8; _render(); });
+    document.getElementById("btn-zoom-in").addEventListener("click", () => _zoomCenter(1.25));
+    document.getElementById("btn-zoom-out").addEventListener("click", () => _zoomCenter(0.8));
+    document.getElementById("btn-center-robot").addEventListener("click", _centerOnRobot);
+    document.getElementById("btn-fit-map").addEventListener("click", _autoFit);
 
-    // Center-on-robot button
-    document.getElementById("btn-center-robot").addEventListener("click", () => {
-      _centerOnRobot();
-    });
-
-    // Fit-map button
-    document.getElementById("btn-fit-map").addEventListener("click", () => {
-      _fitMapToView();
-    });
-
-    // Mouse coordinate display
     canvas.addEventListener("mousemove", _onMouseMoveCoords);
     canvas.addEventListener("mouseleave", () => {
       const el = document.getElementById("map-cursor-pos");
       if (el) el.textContent = "X: -- Y: --";
     });
 
-    // Layer toggle checkboxes
     document.querySelectorAll(".layer-toggle").forEach((cb) => {
       cb.addEventListener("change", (e) => {
         layers[e.target.dataset.layer] = e.target.checked;
@@ -96,11 +93,11 @@ const MapViewer = (() => {
     });
   }
 
+  // ---- Subscriptions ----------------------------------------------------
+
   function subscribeTopics() {
-    // Unsubscribe old topics (handles reconnect)
     activeSubs.forEach((t) => { try { t.unsubscribe(); } catch (_) {} });
     activeSubs = [];
-
     console.log("[MapViewer] Subscribing to topics...");
 
     // OccupancyGrid
@@ -108,150 +105,104 @@ const MapViewer = (() => {
       console.log("[MapViewer] /map received:", msg.info.width + "x" + msg.info.height);
       mapData = msg;
       _buildMapImage(msg);
+      if (!autoFitted) { autoFitted = true; _autoFit(); }
       _render();
-      document.getElementById("map-resolution").textContent = `Res: ${msg.info.resolution.toFixed(3)} m/px`;
-      document.getElementById("map-size").textContent = `Size: ${msg.info.width}x${msg.info.height}`;
+      document.getElementById("map-resolution").textContent = "Res: " + msg.info.resolution.toFixed(3) + " m/px";
+      document.getElementById("map-size").textContent = "Size: " + msg.info.width + "x" + msg.info.height;
     }, { throttle: 2000 }));
 
-    // Robot pose (AMCL — in MAP frame, authoritative for position on map)
+    // AMCL pose (MAP frame)
     activeSubs.push(RosBridge.subscribe("/amcl_pose", "geometry_msgs/msg/PoseWithCovarianceStamped", (msg) => {
       const p = msg.pose.pose;
-      const yaw = _quaternionToYaw(p.orientation);
-      robotPose = { x: p.position.x, y: p.position.y, theta: yaw };
+      robotPose = { x: p.position.x, y: p.position.y, theta: _qToYaw(p.orientation) };
       hasAmcl = true;
       _pushTrail(robotPose);
       _updatePoseUI(p);
-      _autoCenterOnce();
       _render();
     }, { throttle: 100 }));
 
-    // Odom — in ODOM frame; convert to map frame via TF when AMCL is not available
+    // Odom (ODOM frame)
     let odomCount = 0;
     activeSubs.push(RosBridge.subscribe("/odom", "nav_msgs/msg/Odometry", (msg) => {
-      if (odomCount++ === 0) console.log("[MapViewer] First /odom message received");
+      if (odomCount++ === 0) console.log("[MapViewer] First /odom received");
       const p = msg.pose.pose;
-      const yaw = _quaternionToYaw(p.orientation);
-      odomPose = { x: p.position.x, y: p.position.y, theta: yaw };
+      odomPose = { x: p.position.x, y: p.position.y, theta: _qToYaw(p.orientation) };
       if (!hasAmcl) {
         robotPose = _odomToMap(odomPose);
         _updatePoseUI(p);
-        _autoCenterOnce();
       }
       _pushTrail(robotPose);
       _render();
     }, { throttle: 100 }));
 
-    // TF — listen for map→odom transform to correctly place robot on map
+    // TF map->odom
     let tfCount = 0;
     const _processTF = (msg) => {
-      const transforms = msg.transforms || [];
-      for (const t of transforms) {
+      for (const t of (msg.transforms || [])) {
         const parent = (t.header.frame_id || "").replace(/^\//, "");
         const child = (t.child_frame_id || "").replace(/^\//, "");
         if (parent === "map" && child === "odom") {
           const tr = t.transform;
           tfMapToOdom = {
-            x: tr.translation.x,
-            y: tr.translation.y,
-            theta: _quaternionToYaw(tr.rotation),
+            x: tr.translation.x, y: tr.translation.y,
+            theta: _qToYaw(tr.rotation),
           };
-          if (tfCount++ === 0) console.log("[MapViewer] First map→odom TF received:", tfMapToOdom);
-          // Recompute robot pose immediately with new TF
-          if (!hasAmcl && odomPose) {
-            robotPose = _odomToMap(odomPose);
-          }
+          if (tfCount++ === 0) console.log("[MapViewer] First map->odom TF:", tfMapToOdom);
+          if (!hasAmcl && odomPose) robotPose = _odomToMap(odomPose);
         }
       }
     };
-    // Subscribe with low throttle to not miss transforms
     activeSubs.push(RosBridge.subscribe("/tf", "tf2_msgs/msg/TFMessage", _processTF, { throttle: 50 }));
-    // Also listen to /tf_static (some transforms published there)
     activeSubs.push(RosBridge.subscribe("/tf_static", "tf2_msgs/msg/TFMessage", _processTF, { throttle: 0 }));
 
-    // Warn if no TF after 5 seconds
-    setTimeout(() => {
-      if (!tfMapToOdom && !hasAmcl) {
-        console.warn("[MapViewer] No map→odom TF received after 5s. Robot may appear at wrong position.");
-        _setStatus("Warning: No map→odom TF — robot position may be wrong");
-      }
-    }, 5000);
-
     // LaserScan
-    let scanCount = 0;
     activeSubs.push(RosBridge.subscribe("/scan", "sensor_msgs/msg/LaserScan", (msg) => {
-      if (scanCount++ === 0) console.log("[MapViewer] First /scan message received");
       _processLaserScan(msg);
       _render();
     }, { throttle: 150 }));
 
-    // Navigation plan path
-    activeSubs.push(RosBridge.subscribe("/plan", "nav_msgs/msg/Path", (msg) => {
-      navPath = (msg.poses || []).map((ps) => ({
-        x: ps.pose.position.x,
-        y: ps.pose.position.y,
-      }));
+    // Nav path
+    const _pathCb = (msg) => {
+      navPath = (msg.poses || []).map((ps) => ({ x: ps.pose.position.x, y: ps.pose.position.y }));
       _render();
-    }, { throttle: 500 }));
+    };
+    activeSubs.push(RosBridge.subscribe("/plan", "nav_msgs/msg/Path", _pathCb, { throttle: 500 }));
+    activeSubs.push(RosBridge.subscribe("/received_global_plan", "nav_msgs/msg/Path", _pathCb, { throttle: 500 }));
 
-    // Also try /received_global_plan (Nav2 controller)
-    activeSubs.push(RosBridge.subscribe("/received_global_plan", "nav_msgs/msg/Path", (msg) => {
-      navPath = (msg.poses || []).map((ps) => ({
-        x: ps.pose.position.x,
-        y: ps.pose.position.y,
-      }));
+    // Local costmap (also fallback for robot position)
+    activeSubs.push(RosBridge.subscribe("/local_costmap/costmap", "nav_msgs/msg/OccupancyGrid", (msg) => {
+      costmapData = msg;
+      _buildCostmapImage(msg);
+      if (!tfMapToOdom && !hasAmcl && msg.info) {
+        const cx = msg.info.origin.position.x + (msg.info.width * msg.info.resolution) / 2;
+        const cy = msg.info.origin.position.y + (msg.info.height * msg.info.resolution) / 2;
+        robotPose = { x: cx, y: cy, theta: robotPose ? robotPose.theta : 0 };
+      }
       _render();
-    }, { throttle: 500 }));
+    }, { throttle: 1000 }));
 
-    // Local costmap — also used as fallback for robot position
-    activeSubs.push(RosBridge.subscribe(
-      "/local_costmap/costmap",
-      "nav_msgs/msg/OccupancyGrid",
-      (msg) => {
-        costmapData = msg;
-        _buildCostmapImage(msg);
-
-        // Fallback: if no TF and no AMCL, estimate robot position from
-        // costmap center (local costmap is always centered on the robot)
-        if (!tfMapToOdom && !hasAmcl && msg.info) {
-          const cx = msg.info.origin.position.x + (msg.info.width * msg.info.resolution) / 2;
-          const cy = msg.info.origin.position.y + (msg.info.height * msg.info.resolution) / 2;
-          robotPose = { x: cx, y: cy, theta: robotPose ? robotPose.theta : 0 };
-          _autoCenterOnce();
-        }
-
-        _render();
-      },
-      { throttle: 1000 }
-    ));
-
-    // Nav2 status – clear goal on success
-    activeSubs.push(RosBridge.subscribe(
-      "/navigate_to_pose/_action/status",
-      "action_msgs/msg/GoalStatusArray",
-      (msg) => {
-        const statuses = msg.status_list || [];
-        if (statuses.length > 0 && statuses[statuses.length - 1].status === 4) {
-          goalPose = null;
-          navPath = [];
-          _render();
-          _setStatus("Navigation goal reached");
-        }
-      },
-      { throttle: 1000 }
-    ));
+    // Nav2 status
+    activeSubs.push(RosBridge.subscribe("/navigate_to_pose/_action/status", "action_msgs/msg/GoalStatusArray", (msg) => {
+      const list = msg.status_list || [];
+      if (list.length > 0 && list[list.length - 1].status === 4) {
+        goalPose = null; navPath = []; _render();
+        _setStatus("Navigation goal reached");
+      }
+    }, { throttle: 1000 }));
   }
 
   // ---- Odom trail -------------------------------------------------------
 
   function _pushTrail(pose) {
+    if (!pose) return;
     const now = Date.now();
-    if (now - lastTrailTime < 80) return; // ~12 Hz sampling
+    if (now - lastTrailTime < 80) return;
     lastTrailTime = now;
     odomTrail.push({ x: pose.x, y: pose.y, t: now });
     if (odomTrail.length > TRAIL_MAX) odomTrail.shift();
   }
 
-  // ---- Laser scan processing --------------------------------------------
+  // ---- Laser scan -------------------------------------------------------
 
   function _processLaserScan(msg) {
     const pose = robotPose || (odomPose && _odomToMap(odomPose));
@@ -260,392 +211,254 @@ const MapViewer = (() => {
     const { angle_min, angle_increment, ranges, range_min, range_max } = msg;
     const cosR = Math.cos(pose.theta);
     const sinR = Math.sin(pose.theta);
-
-    // Downsample for performance (every 3rd ray)
     for (let i = 0; i < ranges.length; i += 3) {
       const r = ranges[i];
       if (r < range_min || r > range_max || !isFinite(r)) continue;
-      const angle = angle_min + i * angle_increment;
-      const lx = r * Math.cos(angle);
-      const ly = r * Math.sin(angle);
-      // Transform to map frame
-      pts.push({
-        x: pose.x + cosR * lx - sinR * ly,
-        y: pose.y + sinR * lx + cosR * ly,
-      });
+      const a = angle_min + i * angle_increment;
+      const lx = r * Math.cos(a), ly = r * Math.sin(a);
+      pts.push({ x: pose.x + cosR*lx - sinR*ly, y: pose.y + sinR*lx + cosR*ly });
     }
     laserPoints = pts;
   }
 
-  // ---- Map building -----------------------------------------------------
+  // ---- Map image build --------------------------------------------------
 
   function _buildMapImage(msg) {
-    const w = msg.info.width;
-    const h = msg.info.height;
+    const w = msg.info.width, h = msg.info.height;
     const data = msg.data;
     const imgData = new ImageData(w, h);
 
     for (let i = 0; i < data.length; i++) {
-      const val = data[i];
-      const idx = i * 4;
-      if (val === -1) {
-        // Unknown – RViz default gray
-        imgData.data[idx]     = 205;
-        imgData.data[idx + 1] = 205;
-        imgData.data[idx + 2] = 205;
-      } else if (val <= 50) {
-        // Free / low probability – white (RViz uses threshold ~65)
-        imgData.data[idx]     = 254;
-        imgData.data[idx + 1] = 254;
-        imgData.data[idx + 2] = 254;
+      const v = data[i], idx = i * 4;
+      if (v === -1) {
+        imgData.data[idx] = 205; imgData.data[idx+1] = 205; imgData.data[idx+2] = 205;
+      } else if (v <= 50) {
+        imgData.data[idx] = 254; imgData.data[idx+1] = 254; imgData.data[idx+2] = 254;
       } else {
-        // Occupied – solid black
-        imgData.data[idx]     = 0;
-        imgData.data[idx + 1] = 0;
-        imgData.data[idx + 2] = 0;
+        imgData.data[idx] = 0; imgData.data[idx+1] = 0; imgData.data[idx+2] = 0;
       }
-      imgData.data[idx + 3] = 255;
+      imgData.data[idx+3] = 255;
     }
 
-    const offscreen = document.createElement("canvas");
-    offscreen.width = w;
-    offscreen.height = h;
-    offscreen.getContext("2d").putImageData(imgData, 0, 0);
-    mapImage = offscreen;
+    // OccupancyGrid is row-major bottom-to-top; canvas is top-to-bottom -> flip
+    const tmp = document.createElement("canvas");
+    tmp.width = w; tmp.height = h;
+    tmp.getContext("2d").putImageData(imgData, 0, 0);
+
+    const off = document.createElement("canvas");
+    off.width = w; off.height = h;
+    const offCtx = off.getContext("2d");
+    offCtx.translate(0, h);
+    offCtx.scale(1, -1);
+    offCtx.drawImage(tmp, 0, 0);
+    mapImage = off;
   }
 
-  // ---- Costmap building -------------------------------------------------
+  // ---- Costmap image build ----------------------------------------------
 
   function _buildCostmapImage(msg) {
-    const w = msg.info.width;
-    const h = msg.info.height;
+    const w = msg.info.width, h = msg.info.height;
     const data = msg.data;
     const imgData = new ImageData(w, h);
 
     for (let i = 0; i < data.length; i++) {
-      const val = data[i];
-      const idx = i * 4;
-      if (val <= 0 || val === -1) {
-        // Free / unknown – transparent
-        imgData.data[idx + 3] = 0;
-      } else if (val >= 100) {
-        // Lethal – solid magenta/red
-        imgData.data[idx]     = 200;
-        imgData.data[idx + 1] = 0;
-        imgData.data[idx + 2] = 120;
-        imgData.data[idx + 3] = 180;
-      } else if (val >= 99) {
-        // Inscribed
-        imgData.data[idx]     = 180;
-        imgData.data[idx + 1] = 0;
-        imgData.data[idx + 2] = 255;
-        imgData.data[idx + 3] = 160;
+      const v = data[i], idx = i * 4;
+      if (v <= 0 || v === -1) { imgData.data[idx+3] = 0; continue; }
+      if (v >= 100) { imgData.data[idx]=200; imgData.data[idx+1]=0; imgData.data[idx+2]=120; imgData.data[idx+3]=180; continue; }
+      if (v >= 99)  { imgData.data[idx]=180; imgData.data[idx+1]=0; imgData.data[idx+2]=255; imgData.data[idx+3]=160; continue; }
+      const t = v / 98;
+      if (t < 0.5) {
+        const s = t*2;
+        imgData.data[idx]=Math.round(s*255); imgData.data[idx+1]=Math.round(s*200); imgData.data[idx+2]=Math.round((1-s)*200);
       } else {
-        // Cost gradient: blue (low) -> yellow (mid) -> red (high)
-        const t = val / 98;
-        if (t < 0.5) {
-          const s = t * 2;
-          imgData.data[idx]     = Math.round(s * 255);
-          imgData.data[idx + 1] = Math.round(s * 200);
-          imgData.data[idx + 2] = Math.round((1 - s) * 200);
-        } else {
-          const s = (t - 0.5) * 2;
-          imgData.data[idx]     = 255;
-          imgData.data[idx + 1] = Math.round((1 - s) * 200);
-          imgData.data[idx + 2] = 0;
-        }
-        imgData.data[idx + 3] = Math.round(40 + t * 100);
+        const s = (t-0.5)*2;
+        imgData.data[idx]=255; imgData.data[idx+1]=Math.round((1-s)*200); imgData.data[idx+2]=0;
       }
+      imgData.data[idx+3] = Math.round(40 + t*100);
     }
 
-    const offscreen = document.createElement("canvas");
-    offscreen.width = w;
-    offscreen.height = h;
-    offscreen.getContext("2d").putImageData(imgData, 0, 0);
-    costmapImage = offscreen;
+    const tmp = document.createElement("canvas");
+    tmp.width = w; tmp.height = h;
+    tmp.getContext("2d").putImageData(imgData, 0, 0);
+    const off = document.createElement("canvas");
+    off.width = w; off.height = h;
+    const offCtx = off.getContext("2d");
+    offCtx.translate(0, h);
+    offCtx.scale(1, -1);
+    offCtx.drawImage(tmp, 0, 0);
+    costmapImage = off;
   }
 
   // ---- Rendering --------------------------------------------------------
 
   function _render() {
     if (!canvas) return;
-    const W = canvas.width;
-    const H = canvas.height;
+    const W = canvas.width, H = canvas.height;
     ctx.clearRect(0, 0, W, H);
 
-    // RViz-style dark background
-    ctx.fillStyle = "#303030";
+    // Gray background
+    ctx.fillStyle = "#888";
     ctx.fillRect(0, 0, W, H);
 
-    ctx.save();
-    ctx.translate(W / 2 + panX, H / 2 + panY);
-    ctx.scale(scale, scale);
-
-    const res = mapData ? mapData.info.resolution : 0.05;
-
-    // 1. Grid + axes
-    if (layers.grid) _drawWorldGrid(res);
-
-    // 2. Map
+    // 1. Occupancy grid
     if (mapImage && mapData && layers.map) {
-      const ox = mapData.info.origin.position.x;
-      const oy = mapData.info.origin.position.y;
-      const w = mapData.info.width;
-      const h = mapData.info.height;
       ctx.save();
       ctx.imageSmoothingEnabled = false;
-      ctx.scale(1, -1);
-      ctx.drawImage(mapImage, ox / res, -(oy / res) - h, w, h);
+      ctx.drawImage(mapImage, panX, panY, mapData.info.width * scale, mapData.info.height * scale);
       ctx.imageSmoothingEnabled = true;
       ctx.restore();
     }
 
-    // 3. Costmap overlay
-    if (costmapImage && costmapData && layers.costmap) {
-      const ox = costmapData.info.origin.position.x;
-      const oy = costmapData.info.origin.position.y;
-      const cres = costmapData.info.resolution;
-      const w = costmapData.info.width;
-      const h = costmapData.info.height;
+    // 2. Costmap overlay
+    if (costmapImage && costmapData && mapData && layers.costmap) {
+      const mi = mapData.info, ci = costmapData.info;
+      const col = (ci.origin.position.x - mi.origin.position.x) / mi.resolution;
+      const row = mi.height - (ci.origin.position.y - mi.origin.position.y) / mi.resolution
+                  - ci.height * (ci.resolution / mi.resolution);
       ctx.save();
       ctx.imageSmoothingEnabled = false;
-      ctx.scale(1, -1);
-      ctx.drawImage(costmapImage, ox / cres, -(oy / cres) - h, w, h);
-      ctx.imageSmoothingEnabled = true;
+      ctx.globalAlpha = 0.6;
+      ctx.drawImage(costmapImage,
+        panX + col * scale, panY + row * scale,
+        ci.width * (ci.resolution / mi.resolution) * scale,
+        ci.height * (ci.resolution / mi.resolution) * scale);
+      ctx.globalAlpha = 1;
       ctx.restore();
     }
+
+    // 3. Grid
+    if (layers.grid && mapData) _drawGrid();
 
     // 4. Odom trail
-    if (layers.odom && odomTrail.length > 1) _drawOdomTrail(res);
+    if (layers.odom && odomTrail.length > 1) _drawOdomTrail();
 
-    // 5. Navigation path
-    if (layers.path && navPath.length > 1) _drawNavPath(res);
+    // 5. Nav path
+    if (layers.path && navPath.length > 1) _drawNavPath();
 
     // 6. Laser scan
-    if (layers.laser && laserPoints.length > 0) _drawLaserScan(res);
+    if (layers.laser && laserPoints.length > 0) _drawLaserScan();
 
     // 7. Home marker
-    _drawMarker(homePose.x, homePose.y, "#3b82f6", 6, "H", res);
+    if (mapData) _drawMarker(homePose.x, homePose.y, "#e53e3e", "H");
 
     // 8. Goal marker
-    if (goalPose) _drawMarker(goalPose.x, goalPose.y, "#ef4444", 7, "G", res);
+    if (goalPose && mapData) _drawMarker(goalPose.x, goalPose.y, "#3182ce", "G");
 
-    // 9. Robot model + TF
-    if (robotPose && mapData) {
-      if (layers.tf) _drawTFAxes(robotPose, res, "base_link");
-      if (layers.robot) _drawTurtleBot(robotPose, res);
-    }
+    // 9. Robot (green triangle)
+    if (robotPose && mapData && layers.robot) _drawRobot();
 
-    // 10. Map origin TF
-    if (layers.tf && mapData) _drawTFAxes({ x: 0, y: 0, theta: 0 }, res, "map");
+    // 10. TF frames
+    if (robotPose && mapData && layers.tf) _drawTFAxes(robotPose, "base_link");
+    if (mapData && layers.tf) _drawTFAxes({ x:0, y:0, theta:0 }, "map");
 
-    ctx.restore();
-
-    // 11. Warning overlay if TF is missing
+    // 11. Warning
     if (!tfMapToOdom && !hasAmcl && odomPose && mapData) {
-      ctx.save();
       ctx.fillStyle = "rgba(255,180,0,0.85)";
-      ctx.font = "bold 12px monospace";
-      ctx.fillText("⚠ No map→odom TF — robot position may be inaccurate", 10, canvas.height - 30);
-      ctx.restore();
+      ctx.font = "bold 11px monospace";
+      ctx.fillText("No map\u2192odom TF \u2014 robot position approximate", 10, H - 10);
     }
   }
 
-  // ---- World grid with axes ---------------------------------------------
+  // ---- Grid (subtle meter lines) ----------------------------------------
 
-  function _drawWorldGrid(res) {
-    const meterPx = 1.0 / res;
-    const viewR = (Math.max(canvas.width, canvas.height) / scale) * 0.6;
-    const gridStep = meterPx; // 1 meter
+  function _drawGrid() {
+    const res = mapData.info.resolution;
+    const pxPerMeter = scale / res;
+    if (pxPerMeter < 15) return; // too zoomed out
 
-    // Sub-grid (0.5m) when zoomed in
-    if (meterPx * scale > 30) {
-      ctx.strokeStyle = "rgba(255,255,255,0.03)";
-      ctx.lineWidth = 0.3 / scale;
-      const half = meterPx * 0.5;
-      const start = -Math.ceil(viewR / half) * half;
-      const end = Math.ceil(viewR / half) * half;
-      ctx.beginPath();
-      for (let x = start; x <= end; x += half) {
-        ctx.moveTo(x, -viewR);
-        ctx.lineTo(x, viewR);
-      }
-      for (let y = start; y <= end; y += half) {
-        ctx.moveTo(-viewR, y);
-        ctx.lineTo(viewR, y);
-      }
-      ctx.stroke();
+    ctx.strokeStyle = "rgba(0,0,0,0.08)";
+    ctx.lineWidth = 0.5;
+    const info = mapData.info;
+    const mapWpx = info.width * scale, mapHpx = info.height * scale;
+
+    const startX = info.origin.position.x;
+    for (let wx = Math.ceil(startX); wx < startX + info.width * res; wx++) {
+      const { cx } = _worldToCanvas(wx, 0);
+      ctx.beginPath(); ctx.moveTo(cx, panY); ctx.lineTo(cx, panY + mapHpx); ctx.stroke();
     }
+    const startY = info.origin.position.y;
+    for (let wy = Math.ceil(startY); wy < startY + info.height * res; wy++) {
+      const { cy } = _worldToCanvas(0, wy);
+      ctx.beginPath(); ctx.moveTo(panX, cy); ctx.lineTo(panX + mapWpx, cy); ctx.stroke();
+    }
+  }
 
-    // Main grid (1m)
-    ctx.strokeStyle = "rgba(255,255,255,0.07)";
-    ctx.lineWidth = 0.5 / scale;
-    const start = -Math.ceil(viewR / gridStep) * gridStep;
-    const end = Math.ceil(viewR / gridStep) * gridStep;
+  // ---- Robot (green triangle like reference) ----------------------------
+
+  function _drawRobot() {
+    const { cx, cy } = _worldToCanvas(robotPose.x, robotPose.y);
+    const sz = 14;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(-robotPose.theta);
+
     ctx.beginPath();
-    for (let x = start; x <= end; x += gridStep) {
-      ctx.moveTo(x, -viewR);
-      ctx.lineTo(x, viewR);
-    }
-    for (let y = start; y <= end; y += gridStep) {
-      ctx.moveTo(-viewR, y);
-      ctx.lineTo(viewR, y);
-    }
+    ctx.moveTo(sz, 0);
+    ctx.lineTo(-sz * 0.6, -sz * 0.55);
+    ctx.lineTo(-sz * 0.6,  sz * 0.55);
+    ctx.closePath();
+    ctx.fillStyle = "#22c55e";
+    ctx.fill();
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Origin axes (X=red right, Y=green up in ROS but we flip Y on screen)
-    const axLen = meterPx * 1.5;
-    const axW = 2.5 / scale;
-
-    // X axis (red) – points right in map pixels
-    ctx.strokeStyle = "#e04040";
-    ctx.lineWidth = axW;
     ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(axLen, 0);
-    ctx.stroke();
-
-    // Y axis (green) – points up in ROS = negative Y in canvas (we're in scaled space)
-    ctx.strokeStyle = "#40c040";
-    ctx.lineWidth = axW;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(0, -axLen);
-    ctx.stroke();
-
-    // Origin dot
-    ctx.beginPath();
-    ctx.arc(0, 0, 3 / scale, 0, Math.PI * 2);
+    ctx.arc(0, 0, 3, 0, Math.PI * 2);
     ctx.fillStyle = "#fff";
     ctx.fill();
 
-    // Axis labels — draw in screen coords for consistent size
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    const ox = canvas.width / 2 + panX;
-    const oy = canvas.height / 2 + panY;
-    ctx.font = "bold 11px monospace";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillStyle = "#e04040";
-    ctx.fillText("X", ox + axLen * scale + 10, oy);
-    ctx.fillStyle = "#40c040";
-    ctx.fillText("Y", ox, oy - axLen * scale - 10);
     ctx.restore();
   }
 
-  // ---- TF coordinate frame axes -----------------------------------------
+  // ---- TF axes ----------------------------------------------------------
 
-  function _drawTFAxes(pose, res, label) {
-    const px = pose.x / res;
-    const py = -pose.y / res;
-    const axLen = 20 / scale;
-    const axW = 2 / scale;
-
+  function _drawTFAxes(pose, label) {
+    const { cx, cy } = _worldToCanvas(pose.x, pose.y);
+    const len = 25;
     ctx.save();
-    ctx.translate(px, py);
+    ctx.translate(cx, cy);
     ctx.rotate(-pose.theta);
 
-    // X axis (red)
-    ctx.strokeStyle = "#ff3333";
-    ctx.lineWidth = axW;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(axLen, 0);
-    ctx.stroke();
-
-    // Arrow head
-    ctx.fillStyle = "#ff3333";
-    ctx.beginPath();
-    ctx.moveTo(axLen + 3 / scale, 0);
-    ctx.lineTo(axLen - 2 / scale, -2.5 / scale);
-    ctx.lineTo(axLen - 2 / scale, 2.5 / scale);
-    ctx.closePath();
-    ctx.fill();
-
-    // Y axis (green)
+    ctx.strokeStyle = "#ff3333"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(len, 0); ctx.stroke();
     ctx.strokeStyle = "#33ff33";
-    ctx.lineWidth = axW;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(0, -axLen);
-    ctx.stroke();
-
-    ctx.fillStyle = "#33ff33";
-    ctx.beginPath();
-    ctx.moveTo(0, -axLen - 3 / scale);
-    ctx.lineTo(-2.5 / scale, -axLen + 2 / scale);
-    ctx.lineTo(2.5 / scale, -axLen + 2 / scale);
-    ctx.closePath();
-    ctx.fill();
-
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(0, -len); ctx.stroke();
     ctx.restore();
 
-    // Label — draw outside scale transform so font is always 10px on screen
     if (label) {
-      const screenX = (canvas.width / 2 + panX) + px * scale;
-      const screenY = (canvas.height / 2 + panY) + py * scale;
-      ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0); // reset to screen coords
       ctx.font = "10px monospace";
-      ctx.fillStyle = "rgba(255,255,255,0.6)";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "top";
-      ctx.fillText(label, screenX + 6, screenY + 6);
-      ctx.restore();
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.fillText(label, cx + 8, cy - 8);
     }
   }
 
   // ---- Odom trail -------------------------------------------------------
 
-  function _drawOdomTrail(res) {
+  function _drawOdomTrail() {
     const now = Date.now();
-    const maxAge = 30000; // 30 seconds fade
-
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-
     for (let i = 1; i < odomTrail.length; i++) {
-      const p0 = odomTrail[i - 1];
-      const p1 = odomTrail[i];
-      const age = now - p1.t;
-      const alpha = Math.max(0.05, 1 - age / maxAge);
-
-      ctx.strokeStyle = `rgba(255,170,0,${(alpha * 0.7).toFixed(3)})`;
-      ctx.lineWidth = Math.max(1, 2.5 / scale) * alpha;
-
-      ctx.beginPath();
-      ctx.moveTo(p0.x / res, -p0.y / res);
-      ctx.lineTo(p1.x / res, -p1.y / res);
-      ctx.stroke();
+      const p0 = _worldToCanvas(odomTrail[i-1].x, odomTrail[i-1].y);
+      const p1 = _worldToCanvas(odomTrail[i].x, odomTrail[i].y);
+      const alpha = Math.max(0.05, 1 - (now - odomTrail[i].t) / 30000);
+      ctx.strokeStyle = "rgba(255,170,0," + (alpha * 0.7).toFixed(3) + ")";
+      ctx.lineWidth = 2 * alpha;
+      ctx.beginPath(); ctx.moveTo(p0.cx, p0.cy); ctx.lineTo(p1.cx, p1.cy); ctx.stroke();
     }
-
-    // Small dots at trail points (every 10th)
-    ctx.fillStyle = "rgba(255,170,0,0.4)";
-    for (let i = 0; i < odomTrail.length; i += 10) {
-      const p = odomTrail[i];
-      const age = now - p.t;
-      const alpha = Math.max(0.05, 1 - age / maxAge);
-      ctx.globalAlpha = alpha;
-      ctx.beginPath();
-      ctx.arc(p.x / res, -p.y / res, 1.2 / scale, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
   }
 
-  // ---- Navigation path --------------------------------------------------
+  // ---- Nav path ---------------------------------------------------------
 
-  function _drawNavPath(res) {
+  function _drawNavPath() {
     ctx.strokeStyle = "rgba(0,200,80,0.8)";
-    ctx.lineWidth = 2 / scale;
-    ctx.setLineDash([6 / scale, 3 / scale]);
-    ctx.lineCap = "round";
-
-    ctx.beginPath();
-    ctx.moveTo(navPath[0].x / res, -navPath[0].y / res);
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 3]);
+    const f = _worldToCanvas(navPath[0].x, navPath[0].y);
+    ctx.beginPath(); ctx.moveTo(f.cx, f.cy);
     for (let i = 1; i < navPath.length; i++) {
-      ctx.lineTo(navPath[i].x / res, -navPath[i].y / res);
+      const p = _worldToCanvas(navPath[i].x, navPath[i].y);
+      ctx.lineTo(p.cx, p.cy);
     }
     ctx.stroke();
     ctx.setLineDash([]);
@@ -653,156 +466,25 @@ const MapViewer = (() => {
 
   // ---- Laser scan -------------------------------------------------------
 
-  function _drawLaserScan(res) {
-    const dotR = 1.2 / scale;
+  function _drawLaserScan() {
     ctx.fillStyle = "#ff2222";
-
-    for (let i = 0; i < laserPoints.length; i++) {
-      const p = laserPoints[i];
-      ctx.beginPath();
-      ctx.arc(p.x / res, -p.y / res, dotR, 0, Math.PI * 2);
-      ctx.fill();
+    for (const lp of laserPoints) {
+      const p = _worldToCanvas(lp.x, lp.y);
+      ctx.beginPath(); ctx.arc(p.cx, p.cy, 1.5, 0, Math.PI * 2); ctx.fill();
     }
   }
 
-  // ---- TurtleBot3 model (top-down footprint) ----------------------------
+  // ---- Markers ----------------------------------------------------------
 
-  function _drawTurtleBot(pose, res) {
-    const px = pose.x / res;
-    const py = -pose.y / res;
-    // TurtleBot3 Burger: ~138mm radius body
-    const bodyR = 8 / scale;
-
-    ctx.save();
-    ctx.translate(px, py);
-    ctx.rotate(-pose.theta);
-
-    // Shadow
-    ctx.beginPath();
-    ctx.arc(1 / scale, 1 / scale, bodyR * 1.1, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(0,0,0,0.3)";
-    ctx.fill();
-
-    // Body plate (dark circle)
-    ctx.beginPath();
-    ctx.arc(0, 0, bodyR, 0, Math.PI * 2);
-    const bodyGrad = ctx.createRadialGradient(
-      -bodyR * 0.2, -bodyR * 0.2, 0,
-      0, 0, bodyR
-    );
-    bodyGrad.addColorStop(0, "#555");
-    bodyGrad.addColorStop(1, "#333");
-    ctx.fillStyle = bodyGrad;
-    ctx.fill();
-    ctx.strokeStyle = "#666";
-    ctx.lineWidth = 1 / scale;
-    ctx.stroke();
-
-    // Wheel wells (two rectangles on left/right)
-    const wheelW = bodyR * 0.25;
-    const wheelH = bodyR * 0.6;
-    ctx.fillStyle = "#222";
-    // Left wheel
-    ctx.fillRect(-wheelW / 2, -bodyR * 0.95, wheelW, wheelH);
-    // Right wheel
-    ctx.fillRect(-wheelW / 2, bodyR * 0.95 - wheelH, wheelW, wheelH);
-
-    // Caster (small circle at back)
-    ctx.beginPath();
-    ctx.arc(-bodyR * 0.65, 0, bodyR * 0.12, 0, Math.PI * 2);
-    ctx.fillStyle = "#444";
-    ctx.fill();
-
-    // LiDAR unit on top (smaller circle, offset forward)
-    ctx.beginPath();
-    ctx.arc(bodyR * 0.15, 0, bodyR * 0.35, 0, Math.PI * 2);
-    const lidarGrad = ctx.createRadialGradient(
-      bodyR * 0.1, -bodyR * 0.05, 0,
-      bodyR * 0.15, 0, bodyR * 0.35
-    );
-    lidarGrad.addColorStop(0, "#4a4a4a");
-    lidarGrad.addColorStop(1, "#2a2a2a");
-    ctx.fillStyle = lidarGrad;
-    ctx.fill();
-    ctx.strokeStyle = "#555";
-    ctx.lineWidth = 0.5 / scale;
-    ctx.stroke();
-
-    // LiDAR spinning indicator
-    ctx.beginPath();
-    ctx.arc(bodyR * 0.15, 0, bodyR * 0.12, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(0,200,255,0.5)";
-    ctx.lineWidth = 0.8 / scale;
-    ctx.stroke();
-
-    // Forward direction indicator (green LED-like dot)
-    ctx.beginPath();
-    ctx.arc(bodyR * 0.8, 0, 2 / scale, 0, Math.PI * 2);
-    const ledGlow = ctx.createRadialGradient(
-      bodyR * 0.8, 0, 0,
-      bodyR * 0.8, 0, 4 / scale
-    );
-    ledGlow.addColorStop(0, "rgba(34,197,94,0.9)");
-    ledGlow.addColorStop(1, "rgba(34,197,94,0)");
-    ctx.fillStyle = ledGlow;
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(bodyR * 0.8, 0, 1.5 / scale, 0, Math.PI * 2);
-    ctx.fillStyle = "#22c55e";
-    ctx.fill();
-
-    // Direction arrow (translucent)
-    ctx.beginPath();
-    ctx.moveTo(bodyR * 1.4, 0);
-    ctx.lineTo(bodyR * 0.95, -bodyR * 0.35);
-    ctx.lineTo(bodyR * 0.95, bodyR * 0.35);
-    ctx.closePath();
-    ctx.fillStyle = "rgba(34,197,94,0.6)";
-    ctx.fill();
-
-    ctx.restore();
-  }
-
-  // ---- Markers (goal / home) --------------------------------------------
-
-  function _drawMarker(worldX, worldY, color, size, label, res) {
-    if (!mapData) return;
-    const px = worldX / res;
-    const py = -worldY / res;
-    const r = size / scale;
-
-    // Soft glow
-    const glow = ctx.createRadialGradient(px, py, r * 0.3, px, py, r * 2.5);
-    glow.addColorStop(0, color + "55");
-    glow.addColorStop(1, color + "00");
-    ctx.beginPath();
-    ctx.arc(px, py, r * 2.5, 0, Math.PI * 2);
-    ctx.fillStyle = glow;
-    ctx.fill();
-
-    // Outer ring
-    ctx.beginPath();
-    ctx.arc(px, py, r * 1.3, 0, Math.PI * 2);
-    ctx.strokeStyle = color + "88";
-    ctx.lineWidth = 1 / scale;
-    ctx.stroke();
-
-    // Filled circle
-    ctx.beginPath();
-    ctx.arc(px, py, r, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 1.2 / scale;
-    ctx.stroke();
-
-    // Label
+  function _drawMarker(wx, wy, color, label) {
+    const { cx, cy } = _worldToCanvas(wx, wy);
+    ctx.beginPath(); ctx.arc(cx, cy, 8, 0, Math.PI*2);
+    ctx.fillStyle = color; ctx.fill();
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
     if (label) {
-      ctx.fillStyle = "#fff";
-      ctx.font = `bold ${Math.max(8, 11 / scale)}px sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(label, px, py);
+      ctx.fillStyle = "#fff"; ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(label, cx, cy);
     }
   }
 
@@ -810,87 +492,50 @@ const MapViewer = (() => {
 
   function setMode(mode) {
     interactionMode = mode;
-    dragMoved = false;  // reset so stale drag state doesn't swallow clicks
+    dragMoved = false;
     canvas.style.cursor = mode ? "crosshair" : "grab";
   }
 
   function _onClick(e) {
-    // If we were dragging (pan), ignore the click
     if (dragMoved) { dragMoved = false; return; }
     if (!interactionMode || !mapData) return;
-
     const rect = canvas.getBoundingClientRect();
-    const cx = e.clientX - rect.left - canvas.width / 2 - panX;
-    const cy = e.clientY - rect.top - canvas.height / 2 - panY;
-    const res = mapData.info.resolution;
-    const worldX = (cx / scale) * res;
-    const worldY = -(cy / scale) * res;
-
-    if (interactionMode === "navigate") {
-      _sendNavGoal(worldX, worldY);
-    } else if (interactionMode === "initial_pose") {
-      _sendInitialPose(worldX, worldY);
-    }
-
+    const world = _canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
+    if (interactionMode === "navigate") _sendNavGoal(world.x, world.y);
+    else if (interactionMode === "initial_pose") _sendInitialPose(world.x, world.y);
     interactionMode = null;
     canvas.style.cursor = "grab";
   }
 
   function _sendNavGoal(x, y, oz, ow) {
-    goalPose = { x, y };
-    _render();
-
+    goalPose = { x, y }; _render();
     const poseMsg = {
       header: { frame_id: "map", stamp: { sec: 0, nanosec: 0 } },
-      pose: {
-        position: { x, y, z: 0 },
-        orientation: { x: 0, y: 0, z: oz || 0, w: ow || 1 },
-      },
+      pose: { position: { x, y, z: 0 }, orientation: { x: 0, y: 0, z: oz||0, w: ow||1 } },
     };
-
-    // Publish to /goal_pose topic (bt_navigator listens here)
     RosBridge.publish("/goal_pose", "geometry_msgs/msg/PoseStamped", poseMsg);
-
-    // Also try Nav2 action interface (more reliable)
     try {
-      const actionClient = RosBridge.actionClient(
-        "/navigate_to_pose",
-        "nav2_msgs/action/NavigateToPose"
-      );
-      const goal = new ROSLIB.Goal({
-        actionClient,
-        goalMessage: { pose: poseMsg },
-      });
-      goal.send();
-    } catch (_) { /* action may not be available */ }
-
-    _setStatus(`Nav goal: (${x.toFixed(2)}, ${y.toFixed(2)})`);
+      const ac = RosBridge.actionClient("/navigate_to_pose", "nav2_msgs/action/NavigateToPose");
+      new ROSLIB.Goal({ actionClient: ac, goalMessage: { pose: poseMsg } }).send();
+    } catch (_) {}
+    _setStatus("Nav goal: (" + x.toFixed(2) + ", " + y.toFixed(2) + ")");
   }
 
   function _sendInitialPose(x, y) {
     RosBridge.publish("/initialpose", "geometry_msgs/msg/PoseWithCovarianceStamped", {
       header: { frame_id: "map" },
-      pose: {
-        pose: {
-          position: { x, y, z: 0 },
-          orientation: { x: 0, y: 0, z: 0, w: 1 },
-        },
-        covariance: new Array(36).fill(0),
-      },
+      pose: { pose: { position: { x, y, z: 0 }, orientation: { x:0, y:0, z:0, w:1 } }, covariance: new Array(36).fill(0) },
     });
-    _setStatus(`Initial pose set: (${x.toFixed(2)}, ${y.toFixed(2)})`);
+    _setStatus("Initial pose set: (" + x.toFixed(2) + ", " + y.toFixed(2) + ")");
   }
 
-  function navigateTo(x, y, oz, ow) {
-    _sendNavGoal(x, y, oz, ow);
-  }
+  function navigateTo(x, y, oz, ow) { _sendNavGoal(x, y, oz, ow); }
 
   // ---- Pan & Zoom -------------------------------------------------------
 
   function _onMouseDown(e) {
     if (interactionMode) return;
-    isDragging = true;
-    dragMoved = false;
+    isDragging = true; dragMoved = false;
     dragStart = { x: e.clientX - panX, y: e.clientY - panY };
     canvas.style.cursor = "grabbing";
   }
@@ -911,8 +556,21 @@ const MapViewer = (() => {
   function _onWheel(e) {
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.1 : 0.9;
-    scale *= factor;
-    scale = Math.max(0.2, Math.min(scale, 30));
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const ns = Math.max(0.1, Math.min(scale * factor, 30));
+    panX = mx - (mx - panX) * (ns / scale);
+    panY = my - (my - panY) * (ns / scale);
+    scale = ns;
+    _render();
+  }
+
+  function _zoomCenter(factor) {
+    const mx = canvas.width / 2, my = canvas.height / 2;
+    const ns = Math.max(0.1, Math.min(scale * factor, 30));
+    panX = mx - (mx - panX) * (ns / scale);
+    panY = my - (my - panY) * (ns / scale);
+    scale = ns;
     _render();
   }
 
@@ -920,110 +578,65 @@ const MapViewer = (() => {
 
   function _resizeCanvas() {
     if (!canvas) return;
-    const container = canvas.parentElement;
-    canvas.width = container.clientWidth;
-    canvas.height = container.clientHeight;
+    const c = canvas.parentElement;
+    canvas.width = c.clientWidth;
+    canvas.height = c.clientHeight;
     _render();
   }
 
-  function _quaternionToYaw(q) {
+  function _autoFit() {
+    if (!mapData || !canvas) return;
+    const W = canvas.width, H = canvas.height;
+    const mw = mapData.info.width, mh = mapData.info.height;
+    const pad = 20;
+    scale = Math.min((W - pad*2) / mw, (H - pad*2) / mh);
+    scale = Math.max(0.1, Math.min(scale, 30));
+    panX = (W - mw * scale) / 2;
+    panY = (H - mh * scale) / 2;
+    _render();
+  }
+
+  function _centerOnRobot() {
+    if (!robotPose || !mapData || !canvas) return;
+    const info = mapData.info;
+    const col = (robotPose.x - info.origin.position.x) / info.resolution;
+    const row = info.height - (robotPose.y - info.origin.position.y) / info.resolution;
+    panX = canvas.width / 2 - col * scale;
+    panY = canvas.height / 2 - row * scale;
+    _render();
+  }
+
+  function _onMouseMoveCoords(e) {
+    if (!mapData) return;
+    const rect = canvas.getBoundingClientRect();
+    const w = _canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
+    const el = document.getElementById("map-cursor-pos");
+    if (el) el.textContent = "X: " + w.x.toFixed(2) + " Y: " + w.y.toFixed(2);
+  }
+
+  function _qToYaw(q) {
     return Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
   }
 
-  /** Convert a pose from odom frame to map frame using the cached TF. */
   function _odomToMap(pose) {
     if (!tfMapToOdom) return pose;
-    const cos = Math.cos(tfMapToOdom.theta);
-    const sin = Math.sin(tfMapToOdom.theta);
+    const c = Math.cos(tfMapToOdom.theta), s = Math.sin(tfMapToOdom.theta);
     return {
-      x: tfMapToOdom.x + cos * pose.x - sin * pose.y,
-      y: tfMapToOdom.y + sin * pose.x + cos * pose.y,
+      x: tfMapToOdom.x + c * pose.x - s * pose.y,
+      y: tfMapToOdom.y + s * pose.x + c * pose.y,
       theta: pose.theta + tfMapToOdom.theta,
     };
   }
 
   function _updatePoseUI(pose) {
     const ids = ["pos-x","pos-y","pos-z","ori-x","ori-y","ori-z","ori-w"];
-    const vals = [
-      pose.position.x, pose.position.y, pose.position.z,
-      pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w,
-    ];
-    ids.forEach((id, i) => {
-      const el = document.getElementById(id);
-      if (el) el.textContent = vals[i].toFixed(3);
-    });
+    const vals = [pose.position.x, pose.position.y, pose.position.z,
+                  pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w];
+    ids.forEach((id, i) => { const el = document.getElementById(id); if (el) el.textContent = vals[i].toFixed(3); });
   }
 
-  function _setStatus(msg) {
-    document.getElementById("status-message").textContent = msg;
-  }
+  function _setStatus(msg) { document.getElementById("status-message").textContent = msg; }
+  function getRobotPose() { return robotPose; }
 
-  function getRobotPose() {
-    return robotPose;
-  }
-
-  /** Auto-center on robot once when first pose arrives. */
-  function _autoCenterOnce() {
-    if (autoCenteredOnce) return;
-    autoCenteredOnce = true;
-    // Zoom so 1 meter ≈ 60px on screen (comfortable for indoor SLAM)
-    const res = mapData ? mapData.info.resolution : 0.05;
-    const desiredScale = 60 * res;  // scale factor: pixels-per-grid-cell
-    _centerOnRobot(Math.max(0.5, Math.min(desiredScale, 8)));
-  }
-
-  // ---- Center / Fit helpers ---------------------------------------------
-
-  /** Pan and zoom so the robot is centered on screen. */
-  function _centerOnRobot(newScale) {
-    if (!robotPose || !canvas) return;
-    const res = mapData ? mapData.info.resolution : 0.05;
-    const s = newScale || scale;
-    scale = s;
-    // Robot world→canvas: px = (worldX / res) * scale
-    panX = -(robotPose.x / res) * s;
-    panY =  (robotPose.y / res) * s;   // Y flipped
-    _render();
-  }
-
-  /** Zoom to fit the entire map in the viewport. */
-  function _fitMapToView() {
-    if (!mapData || !canvas) return;
-    const res = mapData.info.resolution;
-    const mw = mapData.info.width;   // pixels
-    const mh = mapData.info.height;
-    const W = canvas.width;
-    const H = canvas.height;
-
-    // Fit map pixels into viewport with margin
-    const margin = 40;
-    const fitScale = Math.min((W - margin) / mw, (H - margin) / mh);
-    scale = Math.max(0.2, Math.min(fitScale, 30));
-
-    // Center on map center (in world coords)
-    const ox = mapData.info.origin.position.x;
-    const oy = mapData.info.origin.position.y;
-    const cx = ox + (mw * res) / 2;
-    const cy = oy + (mh * res) / 2;
-    panX = -(cx / res) * scale;
-    panY =  (cy / res) * scale;
-    _render();
-  }
-
-  /** Show world coordinates under cursor. */
-  function _onMouseMoveCoords(e) {
-    if (!mapData) return;
-    const rect = canvas.getBoundingClientRect();
-    const cx = e.clientX - rect.left - canvas.width / 2 - panX;
-    const cy = e.clientY - rect.top - canvas.height / 2 - panY;
-    const res = mapData.info.resolution;
-    const worldX = (cx / scale) * res;
-    const worldY = -(cy / scale) * res;
-    const el = document.getElementById("map-cursor-pos");
-    if (el) el.textContent = `X: ${worldX.toFixed(2)} Y: ${worldY.toFixed(2)}`;
-  }
-
-  // ---- Public -----------------------------------------------------------
-
-  return { init, subscribeTopics, setMode, navigateTo, getRobotPose, centerOnRobot: _centerOnRobot, fitMap: _fitMapToView };
+  return { init, subscribeTopics, setMode, navigateTo, getRobotPose, centerOnRobot: _centerOnRobot, fitMap: _autoFit };
 })();
