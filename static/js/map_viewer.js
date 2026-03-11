@@ -42,14 +42,24 @@ const MapViewer = (() => {
   let interactionMode = null;
   let activeSubs = [];
 
+  let mapOriginYaw = 0; // cached yaw of map origin orientation
+
   // ---- Coordinate conversion --------------------------------------------
-  // World (meters) -> canvas pixels using map origin + resolution + view transform
+  // World (meters) -> grid cell -> canvas pixels
+  // Handles rotated map origins (common with Cartographer SLAM)
 
   function _worldToCanvas(wx, wy) {
     if (!mapData) return { cx: 0, cy: 0 };
     const info = mapData.info;
-    const col = (wx - info.origin.position.x) / info.resolution;
-    const row = info.height - (wy - info.origin.position.y) / info.resolution;
+    const dx = wx - info.origin.position.x;
+    const dy = wy - info.origin.position.y;
+    // Rotate into map-local frame if origin has orientation
+    const cosO = Math.cos(-mapOriginYaw);
+    const sinO = Math.sin(-mapOriginYaw);
+    const lx = cosO * dx - sinO * dy;
+    const ly = sinO * dx + cosO * dy;
+    const col = lx / info.resolution;
+    const row = info.height - ly / info.resolution;
     return { cx: col * scale + panX, cy: row * scale + panY };
   }
 
@@ -58,9 +68,14 @@ const MapViewer = (() => {
     const info = mapData.info;
     const col = (cx - panX) / scale;
     const row = (cy - panY) / scale;
+    const lx = col * info.resolution;
+    const ly = (info.height - row) * info.resolution;
+    // Rotate back from map-local frame to world frame
+    const cosO = Math.cos(mapOriginYaw);
+    const sinO = Math.sin(mapOriginYaw);
     return {
-      x: info.origin.position.x + col * info.resolution,
-      y: info.origin.position.y + (info.height - row) * info.resolution,
+      x: info.origin.position.x + cosO * lx - sinO * ly,
+      y: info.origin.position.y + sinO * lx + cosO * ly,
     };
   }
 
@@ -106,8 +121,12 @@ const MapViewer = (() => {
 
     // OccupancyGrid
     activeSubs.push(RosBridge.subscribe("/map", "nav_msgs/msg/OccupancyGrid", (msg) => {
-      console.log("[MapViewer] /map received:", msg.info.width + "x" + msg.info.height);
+      console.log("[MapViewer] /map received:", msg.info.width + "x" + msg.info.height,
+        "origin:", msg.info.origin.position.x.toFixed(3), msg.info.origin.position.y.toFixed(3),
+        "orientation:", JSON.stringify(msg.info.origin.orientation));
       mapData = msg;
+      mapOriginYaw = _qToYaw(msg.info.origin.orientation);
+      console.log("[MapViewer] Map origin yaw:", (mapOriginYaw * 180 / Math.PI).toFixed(2) + "°");
       _buildMapImage(msg);
       if (!autoFitted) { autoFitted = true; _autoFit(); }
       _render();
@@ -116,10 +135,20 @@ const MapViewer = (() => {
     }, { throttle: 2000 }));
 
     // AMCL pose (MAP frame)
+    let amclCount = 0;
     activeSubs.push(RosBridge.subscribe("/amcl_pose", "geometry_msgs/msg/PoseWithCovarianceStamped", (msg) => {
       const p = msg.pose.pose;
       robotPose = { x: p.position.x, y: p.position.y, theta: _qToYaw(p.orientation) };
       hasAmcl = true;
+      if (amclCount++ < 3) {
+        console.log("[MapViewer] AMCL pose:", robotPose.x.toFixed(3), robotPose.y.toFixed(3),
+          "theta:", (robotPose.theta * 180 / Math.PI).toFixed(1) + "°");
+        if (mapData) {
+          const { cx, cy } = _worldToCanvas(robotPose.x, robotPose.y);
+          console.log("[MapViewer] Robot canvas pos:", cx.toFixed(1), cy.toFixed(1),
+            "canvas:", canvas.width + "x" + canvas.height);
+        }
+      }
       nav2Status.locActive = true;
       _updateNav2UI();
       _pushTrail(robotPose);
@@ -700,11 +729,10 @@ const MapViewer = (() => {
 
   function _centerOnRobot() {
     if (!robotPose || !mapData || !canvas) return;
-    const info = mapData.info;
-    const col = (robotPose.x - info.origin.position.x) / info.resolution;
-    const row = info.height - (robotPose.y - info.origin.position.y) / info.resolution;
-    panX = canvas.width / 2 - col * scale;
-    panY = canvas.height / 2 - row * scale;
+    // Use the same coordinate conversion as _worldToCanvas
+    const { cx, cy } = _worldToCanvas(robotPose.x, robotPose.y);
+    panX += canvas.width / 2 - cx;
+    panY += canvas.height / 2 - cy;
     _render();
   }
 
