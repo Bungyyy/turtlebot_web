@@ -25,6 +25,10 @@ const MapViewer = (() => {
   let navPath = [];
   let costmapImage = null;
   let costmapData = null;
+  let globalCostmapImage = null;
+  let globalCostmapData = null;
+  let nav2Status = { navActive: false, locActive: false, feedbackActive: false,
+                     eta: 0, distance: 0, timeTaken: 0, recoveries: 0, goalStartTime: 0 };
 
   let layers = {
     map: true, costmap: true, laser: true, path: true,
@@ -116,6 +120,8 @@ const MapViewer = (() => {
       const p = msg.pose.pose;
       robotPose = { x: p.position.x, y: p.position.y, theta: _qToYaw(p.orientation) };
       hasAmcl = true;
+      nav2Status.locActive = true;
+      _updateNav2UI();
       _pushTrail(robotPose);
       _updatePoseUI(p);
       _render();
@@ -169,10 +175,17 @@ const MapViewer = (() => {
     activeSubs.push(RosBridge.subscribe("/plan", "nav_msgs/msg/Path", _pathCb, { throttle: 500 }));
     activeSubs.push(RosBridge.subscribe("/received_global_plan", "nav_msgs/msg/Path", _pathCb, { throttle: 500 }));
 
+    // Global costmap
+    activeSubs.push(RosBridge.subscribe("/global_costmap/costmap", "nav_msgs/msg/OccupancyGrid", (msg) => {
+      globalCostmapData = msg;
+      globalCostmapImage = _buildCostmapImage(msg);
+      _render();
+    }, { throttle: 3000 }));
+
     // Local costmap (also fallback for robot position)
     activeSubs.push(RosBridge.subscribe("/local_costmap/costmap", "nav_msgs/msg/OccupancyGrid", (msg) => {
       costmapData = msg;
-      _buildCostmapImage(msg);
+      costmapImage = _buildCostmapImage(msg);
       if (!tfMapToOdom && !hasAmcl && msg.info) {
         const cx = msg.info.origin.position.x + (msg.info.width * msg.info.resolution) / 2;
         const cy = msg.info.origin.position.y + (msg.info.height * msg.info.resolution) / 2;
@@ -181,14 +194,48 @@ const MapViewer = (() => {
       _render();
     }, { throttle: 1000 }));
 
-    // Nav2 status
+    // Nav2 action status
     activeSubs.push(RosBridge.subscribe("/navigate_to_pose/_action/status", "action_msgs/msg/GoalStatusArray", (msg) => {
       const list = msg.status_list || [];
-      if (list.length > 0 && list[list.length - 1].status === 4) {
-        goalPose = null; navPath = []; _render();
-        _setStatus("Navigation goal reached");
+      if (list.length > 0) {
+        const last = list[list.length - 1];
+        // Status: 1=ACCEPTED, 2=EXECUTING, 4=SUCCEEDED, 5=CANCELED, 6=ABORTED
+        const active = last.status === 1 || last.status === 2;
+        nav2Status.navActive = active;
+        _updateNav2UI();
+        if (last.status === 4) {
+          goalPose = null; navPath = []; _render();
+          nav2Status.navActive = false;
+          _updateNav2UI();
+          _setStatus("Navigation goal reached");
+        } else if (last.status === 6) {
+          nav2Status.navActive = false;
+          _updateNav2UI();
+          _setStatus("Navigation aborted");
+        }
       }
-    }, { throttle: 1000 }));
+    }, { throttle: 500 }));
+
+    // Nav2 feedback (ETA, distance, recoveries)
+    activeSubs.push(RosBridge.subscribe("/navigate_to_pose/_action/feedback", "nav2_msgs/action/NavigateToPose_FeedbackMessage", (msg) => {
+      const fb = msg.feedback || msg;
+      nav2Status.feedbackActive = true;
+      if (fb.estimated_time_remaining) {
+        nav2Status.eta = (fb.estimated_time_remaining.sec || 0) + (fb.estimated_time_remaining.nanosec || 0) / 1e9;
+      }
+      if (fb.distance_remaining !== undefined) nav2Status.distance = fb.distance_remaining;
+      if (fb.number_of_recoveries !== undefined) nav2Status.recoveries = fb.number_of_recoveries;
+      if (nav2Status.goalStartTime > 0) {
+        nav2Status.timeTaken = (Date.now() - nav2Status.goalStartTime) / 1000;
+      }
+      _updateNav2UI();
+    }, { throttle: 500 }));
+
+    // AMCL active = localization active
+    activeSubs.push(RosBridge.subscribe("/particle_cloud", "nav2_msgs/msg/ParticleCloud", () => {
+      nav2Status.locActive = true;
+      _updateNav2UI();
+    }, { throttle: 2000 }));
   }
 
   // ---- Odom trail -------------------------------------------------------
@@ -231,10 +278,13 @@ const MapViewer = (() => {
     for (let i = 0; i < data.length; i++) {
       const v = data[i], idx = i * 4;
       if (v === -1) {
-        imgData.data[idx] = 205; imgData.data[idx+1] = 205; imgData.data[idx+2] = 205;
+        // Unknown: medium gray (like RViz)
+        imgData.data[idx] = 128; imgData.data[idx+1] = 128; imgData.data[idx+2] = 128;
       } else if (v <= 50) {
-        imgData.data[idx] = 254; imgData.data[idx+1] = 254; imgData.data[idx+2] = 254;
+        // Free space: light gray/white
+        imgData.data[idx] = 240; imgData.data[idx+1] = 240; imgData.data[idx+2] = 240;
       } else {
+        // Occupied: black
         imgData.data[idx] = 0; imgData.data[idx+1] = 0; imgData.data[idx+2] = 0;
       }
       imgData.data[idx+3] = 255;
@@ -256,6 +306,7 @@ const MapViewer = (() => {
 
   // ---- Costmap image build ----------------------------------------------
 
+  // RViz-style costmap: lethal=magenta, inscribed=purple, gradient=blue->cyan
   function _buildCostmapImage(msg) {
     const w = msg.info.width, h = msg.info.height;
     const data = msg.data;
@@ -264,17 +315,29 @@ const MapViewer = (() => {
     for (let i = 0; i < data.length; i++) {
       const v = data[i], idx = i * 4;
       if (v <= 0 || v === -1) { imgData.data[idx+3] = 0; continue; }
-      if (v >= 100) { imgData.data[idx]=200; imgData.data[idx+1]=0; imgData.data[idx+2]=120; imgData.data[idx+3]=180; continue; }
-      if (v >= 99)  { imgData.data[idx]=180; imgData.data[idx+1]=0; imgData.data[idx+2]=255; imgData.data[idx+3]=160; continue; }
+      // Lethal (100) - bright magenta/pink like RViz
+      if (v >= 100) { imgData.data[idx]=255; imgData.data[idx+1]=0; imgData.data[idx+2]=200; imgData.data[idx+3]=200; continue; }
+      // Inscribed (99) - purple
+      if (v >= 99) { imgData.data[idx]=180; imgData.data[idx+1]=0; imgData.data[idx+2]=255; imgData.data[idx+3]=180; continue; }
+      // Gradient: low=deep blue, mid=cyan, high=purple (matching RViz costmap2D)
       const t = v / 98;
-      if (t < 0.5) {
-        const s = t*2;
-        imgData.data[idx]=Math.round(s*255); imgData.data[idx+1]=Math.round(s*200); imgData.data[idx+2]=Math.round((1-s)*200);
+      if (t < 0.33) {
+        const s = t / 0.33;
+        imgData.data[idx] = Math.round(s * 50);
+        imgData.data[idx+1] = Math.round(s * 150);
+        imgData.data[idx+2] = Math.round(150 + s * 105);
+      } else if (t < 0.66) {
+        const s = (t - 0.33) / 0.33;
+        imgData.data[idx] = Math.round(50 + s * 100);
+        imgData.data[idx+1] = Math.round(150 + s * 50);
+        imgData.data[idx+2] = 255;
       } else {
-        const s = (t-0.5)*2;
-        imgData.data[idx]=255; imgData.data[idx+1]=Math.round((1-s)*200); imgData.data[idx+2]=0;
+        const s = (t - 0.66) / 0.34;
+        imgData.data[idx] = Math.round(150 + s * 105);
+        imgData.data[idx+1] = Math.round(200 * (1 - s * 0.6));
+        imgData.data[idx+2] = Math.round(255 * (1 - s * 0.2));
       }
-      imgData.data[idx+3] = Math.round(40 + t*100);
+      imgData.data[idx+3] = Math.round(60 + t * 140);
     }
 
     const tmp = document.createElement("canvas");
@@ -286,7 +349,44 @@ const MapViewer = (() => {
     offCtx.translate(0, h);
     offCtx.scale(1, -1);
     offCtx.drawImage(tmp, 0, 0);
-    costmapImage = off;
+    return off;
+  }
+
+  // ---- Costmap overlay helper -------------------------------------------
+
+  function _drawCostmapOverlay(img, cData, alpha) {
+    const mi = mapData.info, ci = cData.info;
+    const col = (ci.origin.position.x - mi.origin.position.x) / mi.resolution;
+    const row = mi.height - (ci.origin.position.y - mi.origin.position.y) / mi.resolution
+                - ci.height * (ci.resolution / mi.resolution);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img,
+      panX + col * scale, panY + row * scale,
+      ci.width * (ci.resolution / mi.resolution) * scale,
+      ci.height * (ci.resolution / mi.resolution) * scale);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // ---- Nav2 UI update ---------------------------------------------------
+
+  function _updateNav2UI() {
+    const s = nav2Status;
+    const setEl = (id, text, cls) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = text;
+      if (cls !== undefined) { el.className = "nav2-value" + (cls ? " " + cls : ""); }
+    };
+    setEl("nav2-nav-status", s.navActive ? "active" : "inactive", s.navActive ? "active" : "");
+    setEl("nav2-loc-status", s.locActive ? "active" : "inactive", s.locActive ? "active" : "");
+    setEl("nav2-feedback-status", s.feedbackActive ? "active" : "inactive", s.feedbackActive ? "active" : "");
+    setEl("nav2-eta", s.eta > 0 ? Math.round(s.eta) + " s" : "--", "mono");
+    setEl("nav2-distance", s.distance > 0 ? s.distance.toFixed(2) + " m" : "--", "mono");
+    setEl("nav2-time", s.timeTaken > 0 ? Math.round(s.timeTaken) + " s" : "--", "mono");
+    setEl("nav2-recoveries", String(s.recoveries), "mono");
   }
 
   // ---- Rendering --------------------------------------------------------
@@ -296,8 +396,8 @@ const MapViewer = (() => {
     const W = canvas.width, H = canvas.height;
     ctx.clearRect(0, 0, W, H);
 
-    // Gray background
-    ctx.fillStyle = "#888";
+    // Dark gray background like RViz (48,48,48)
+    ctx.fillStyle = "#303030";
     ctx.fillRect(0, 0, W, H);
 
     // 1. Occupancy grid
@@ -309,21 +409,14 @@ const MapViewer = (() => {
       ctx.restore();
     }
 
-    // 2. Costmap overlay
+    // 2. Global costmap overlay
+    if (globalCostmapImage && globalCostmapData && mapData && layers.costmap) {
+      _drawCostmapOverlay(globalCostmapImage, globalCostmapData, 0.5);
+    }
+
+    // 2b. Local costmap overlay (on top of global)
     if (costmapImage && costmapData && mapData && layers.costmap) {
-      const mi = mapData.info, ci = costmapData.info;
-      const col = (ci.origin.position.x - mi.origin.position.x) / mi.resolution;
-      const row = mi.height - (ci.origin.position.y - mi.origin.position.y) / mi.resolution
-                  - ci.height * (ci.resolution / mi.resolution);
-      ctx.save();
-      ctx.imageSmoothingEnabled = false;
-      ctx.globalAlpha = 0.6;
-      ctx.drawImage(costmapImage,
-        panX + col * scale, panY + row * scale,
-        ci.width * (ci.resolution / mi.resolution) * scale,
-        ci.height * (ci.resolution / mi.resolution) * scale);
-      ctx.globalAlpha = 1;
-      ctx.restore();
+      _drawCostmapOverlay(costmapImage, costmapData, 0.7);
     }
 
     // 3. Grid
@@ -451,9 +544,9 @@ const MapViewer = (() => {
   // ---- Nav path ---------------------------------------------------------
 
   function _drawNavPath() {
-    ctx.strokeStyle = "rgba(0,200,80,0.8)";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 3]);
+    // Solid green line like RViz Global Planner path
+    ctx.strokeStyle = "#00e060";
+    ctx.lineWidth = 3;
     const f = _worldToCanvas(navPath[0].x, navPath[0].y);
     ctx.beginPath(); ctx.moveTo(f.cx, f.cy);
     for (let i = 1; i < navPath.length; i++) {
@@ -461,16 +554,16 @@ const MapViewer = (() => {
       ctx.lineTo(p.cx, p.cy);
     }
     ctx.stroke();
-    ctx.setLineDash([]);
   }
 
   // ---- Laser scan -------------------------------------------------------
 
   function _drawLaserScan() {
-    ctx.fillStyle = "#ff2222";
+    // Bright cyan like RViz LaserScan display
+    ctx.fillStyle = "#00ffff";
     for (const lp of laserPoints) {
       const p = _worldToCanvas(lp.x, lp.y);
-      ctx.beginPath(); ctx.arc(p.cx, p.cy, 1.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(p.cx, p.cy, 2.5, 0, Math.PI * 2); ctx.fill();
     }
   }
 
@@ -508,7 +601,16 @@ const MapViewer = (() => {
   }
 
   function _sendNavGoal(x, y, oz, ow) {
-    goalPose = { x, y }; _render();
+    goalPose = { x, y };
+    nav2Status.goalStartTime = Date.now();
+    nav2Status.navActive = true;
+    nav2Status.feedbackActive = false;
+    nav2Status.eta = 0;
+    nav2Status.distance = 0;
+    nav2Status.timeTaken = 0;
+    nav2Status.recoveries = 0;
+    _updateNav2UI();
+    _render();
     const poseMsg = {
       header: { frame_id: "map", stamp: { sec: 0, nanosec: 0 } },
       pose: { position: { x, y, z: 0 }, orientation: { x: 0, y: 0, z: oz||0, w: ow||1 } },

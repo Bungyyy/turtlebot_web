@@ -379,6 +379,44 @@ select.input-sm { cursor: pointer; }
 .dpad-right  { grid-area: right; }
 .dpad-down   { grid-area: down; }
 
+/* ---------- Nav2 Status Panel ---------- */
+.nav2-body {
+  padding: 8px 14px 10px;
+}
+
+.nav2-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.nav2-label {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.nav2-value {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.nav2-value.active {
+  color: var(--accent-green);
+  font-weight: 600;
+}
+
+.nav2-value.mono {
+  font-family: 'Courier New', monospace;
+  color: var(--text-primary);
+}
+
+.nav2-divider {
+  border-top: 1px solid var(--border);
+  margin: 6px 0;
+}
+
 /* ---------- Map ---------- */
 .card-map { height: 100%; display: flex; flex-direction: column; }
 

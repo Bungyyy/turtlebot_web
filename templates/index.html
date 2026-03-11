@@ -100,6 +100,42 @@
             </div>
           </div>
 
+          <!-- Navigation 2 Status (like RViz Navigation 2 panel) -->
+          <div class="card card-nav2-status" id="nav2-status-card">
+            <div class="card-header"><h3>Navigation 2</h3></div>
+            <div class="nav2-body">
+              <div class="nav2-row">
+                <span class="nav2-label">Navigation:</span>
+                <span class="nav2-value" id="nav2-nav-status">inactive</span>
+              </div>
+              <div class="nav2-row">
+                <span class="nav2-label">Localization:</span>
+                <span class="nav2-value" id="nav2-loc-status">inactive</span>
+              </div>
+              <div class="nav2-row">
+                <span class="nav2-label">Feedback:</span>
+                <span class="nav2-value" id="nav2-feedback-status">inactive</span>
+              </div>
+              <div class="nav2-divider"></div>
+              <div class="nav2-row">
+                <span class="nav2-label">ETA:</span>
+                <span class="nav2-value mono" id="nav2-eta">--</span>
+              </div>
+              <div class="nav2-row">
+                <span class="nav2-label">Distance remaining:</span>
+                <span class="nav2-value mono" id="nav2-distance">--</span>
+              </div>
+              <div class="nav2-row">
+                <span class="nav2-label">Time taken:</span>
+                <span class="nav2-value mono" id="nav2-time">--</span>
+              </div>
+              <div class="nav2-row">
+                <span class="nav2-label">Recoveries:</span>
+                <span class="nav2-value mono" id="nav2-recoveries">0</span>
+              </div>
+            </div>
+          </div>
+
           <!-- Teleop D-pad -->
           <div class="card card-controls">
             <div class="card-header"><h3>Teleop</h3></div>
@@ -143,7 +179,7 @@
                 <div class="legend-title">Layers</div>
                 <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="map" checked /><span class="dot" style="background:#d2d2d2"></span> Map</label>
                 <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="robot" checked /><span class="dot dot-green"></span> Robot</label>
-                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="laser" checked /><span class="dot dot-red"></span> LaserScan</label>
+                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="laser" checked /><span class="dot" style="background:#00ffff"></span> LaserScan</label>
                 <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="odom" checked /><span class="dot dot-orange"></span> Odom Trail</label>
                 <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="path" checked /><span class="dot" style="background:#00c850"></span> Nav Path</label>
                 <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="costmap" checked /><span class="dot dot-purple"></span> Costmap</label>
