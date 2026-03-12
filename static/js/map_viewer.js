@@ -134,41 +134,47 @@ const MapViewer = (() => {
       document.getElementById("map-size").textContent = "Size: " + msg.info.width + "x" + msg.info.height;
     }, { throttle: 2000 }));
 
-    // AMCL pose (MAP frame)
+    // AMCL pose (MAP frame) – used as fallback when TF not available
     let amclCount = 0;
     activeSubs.push(RosBridge.subscribe("/amcl_pose", "geometry_msgs/msg/PoseWithCovarianceStamped", (msg) => {
       const p = msg.pose.pose;
-      robotPose = { x: p.position.x, y: p.position.y, theta: _qToYaw(p.orientation) };
+      const amclPose = { x: p.position.x, y: p.position.y, theta: _qToYaw(p.orientation) };
       hasAmcl = true;
-      if (amclCount++ < 3) {
-        console.log("[MapViewer] AMCL pose:", robotPose.x.toFixed(3), robotPose.y.toFixed(3),
-          "theta:", (robotPose.theta * 180 / Math.PI).toFixed(1) + "°");
-        if (mapData) {
-          const { cx, cy } = _worldToCanvas(robotPose.x, robotPose.y);
-          console.log("[MapViewer] Robot canvas pos:", cx.toFixed(1), cy.toFixed(1),
-            "canvas:", canvas.width + "x" + canvas.height);
-        }
-      }
       nav2Status.locActive = true;
       _updateNav2UI();
-      _pushTrail(robotPose);
-      _updatePoseUI(p);
-      _render();
+      if (amclCount++ < 5) {
+        console.log("[MapViewer] AMCL pose:", amclPose.x.toFixed(3), amclPose.y.toFixed(3),
+          "theta:", (amclPose.theta * 180 / Math.PI).toFixed(1) + "°",
+          "using:", tfMapToOdom ? "odom+TF" : "AMCL direct");
+      }
+      // Only use AMCL pose directly when TF is not available
+      // When TF exists, odom+TF is more reliable (always consistent with displayed map)
+      if (!tfMapToOdom) {
+        robotPose = amclPose;
+        _pushTrail(robotPose);
+        _updatePoseUI(p);
+        _render();
+      }
     }, { throttle: 100 }));
 
-    // Odom (ODOM frame)
+    // Odom (ODOM frame) – primary pose source when combined with TF
     let odomCount = 0;
     activeSubs.push(RosBridge.subscribe("/odom", "nav_msgs/msg/Odometry", (msg) => {
       if (odomCount++ === 0) console.log("[MapViewer] First /odom received");
       const p = msg.pose.pose;
       odomPose = { x: p.position.x, y: p.position.y, theta: _qToYaw(p.orientation) };
-      if (!hasAmcl) {
+      // Always use odom+TF when TF available – this is always consistent
+      // with whatever published the map (cartographer or map_server)
+      if (tfMapToOdom) {
         robotPose = _odomToMap(odomPose);
-        _updatePoseUI(p);
+      } else if (!hasAmcl) {
+        robotPose = odomPose; // raw odom fallback
       }
-      _pushTrail(robotPose);
-      _render();
-    }, { throttle: 100 }));
+      if (robotPose) {
+        _pushTrail(robotPose);
+        _render();
+      }
+    }, { throttle: 50 }));
 
     // TF map->odom
     let tfCount = 0;
@@ -183,7 +189,9 @@ const MapViewer = (() => {
             theta: _qToYaw(tr.rotation),
           };
           if (tfCount++ === 0) console.log("[MapViewer] First map->odom TF:", tfMapToOdom);
-          if (!hasAmcl && odomPose) robotPose = _odomToMap(odomPose);
+          if (odomPose) {
+            robotPose = _odomToMap(odomPose);
+          }
         }
       }
     };
@@ -486,13 +494,17 @@ const MapViewer = (() => {
 
     // 11. Debug: show robot world coords on canvas
     if (robotPose && mapData) {
-      const src = hasAmcl ? "AMCL" : (tfMapToOdom ? "odom+TF" : "odom");
+      const src = tfMapToOdom ? "odom+TF" : (hasAmcl ? "AMCL" : "odom");
       const dbg = src + " (" + robotPose.x.toFixed(2) + ", " + robotPose.y.toFixed(2) + ") " +
                   (robotPose.theta * 180 / Math.PI).toFixed(0) + "\u00b0";
       ctx.save();
       ctx.font = "bold 11px monospace";
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillText(dbg, 10, 20);
+      ctx.fillStyle = "rgba(0,0,0,0.7)";
+      const tw = ctx.measureText(dbg).width;
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.fillRect(8, 8, tw + 8, 18);
+      ctx.fillStyle = "rgba(0,0,0,0.8)";
+      ctx.fillText(dbg, 12, 21);
       ctx.restore();
     }
 
