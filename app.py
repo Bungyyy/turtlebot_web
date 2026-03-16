@@ -420,12 +420,13 @@ _sport_msg_type = None          # cached message type
 _sport_move_proc = None         # persistent ssh+ros2 topic pub for velocity
 _sport_move_lock = threading.Lock()
 
-# ROS2 env setup to source on the Jetson via SSH (same as bringup)
+# ROS2 env setup to source on the Jetson via SSH.
+# Do NOT export CYCLONEDDS_URI here – the Jetson's own DDS config (set by the
+# workspace setup.bash) must be used so that the publisher can discover local
+# subscribers.  Forcing eth0-only would block loopback discovery.
 _JETSON_ROS_SETUP = (
     "source /opt/ros/humble/setup.bash 2>/dev/null || true; "
     "source ~/go2_ws/install/setup.bash 2>/dev/null; "
-    f"export RMW_IMPLEMENTATION={RMW_IMPLEMENTATION}; "
-    f"export CYCLONEDDS_URI='{CYCLONEDDS_URI}'; "
     + (f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID}; " if ROS_DOMAIN_ID else "")
 )
 
