@@ -368,11 +368,16 @@
     if (el) el.classList.toggle("active", active);
   }
 
+  let _lastNodeKey = "";
   function _checkNodes() {
     RosBridge.callService("/rosapi/nodes", "rosapi/srv/Nodes", {})
       .then((result) => {
         const nodes = result.nodes || [];
-        console.log("[Main] ROS nodes:", nodes);
+        const key = nodes.slice().sort().join(",");
+        if (key !== _lastNodeKey) {
+          _lastNodeKey = key;
+          console.log("[Main] ROS nodes:", nodes);
+        }
 
         const hasTurtlebot = nodes.some((n) =>
           n.includes("go2") || n.includes("unitree") ||
