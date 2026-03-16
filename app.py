@@ -870,14 +870,21 @@ def _sport_yaml(api_id, params):
       uint8[] binary
     """
     import json
-    param_str = json.dumps(params) if isinstance(params, dict) else str(params)
-    # Match the exact format that works when run manually on the Jetson.
-    # Single-quote the whole YAML so the inner single-quotes around parameter
-    # are escaped with the '\'' idiom (end sq, escaped sq, start sq).
-    escaped_param = param_str.replace("'", "'\\''")
+    # Go2 requires parameter: "" for commands without parameters.
+    # json.dumps({}) produces '{}' which the robot silently ignores.
+    if not params or params == {}:
+        param_str = ""
+    elif isinstance(params, dict):
+        param_str = json.dumps(params)
+    else:
+        param_str = str(params)
+    # Build YAML matching the exact format that works on the Jetson:
+    #   '{header: ..., parameter: "", binary: []}'
+    # The whole thing is single-quoted for the shell.  Double-quotes are
+    # literal inside single-quotes, so we just embed " directly.
     return (
         "'{header: {identity: {id: 0, api_id: " + str(api_id) + "}}, "
-        "parameter: '\"'\"'" + escaped_param + "'\"'\"', "
+        'parameter: "' + param_str + '", '
         "binary: []}'"
     )
 
