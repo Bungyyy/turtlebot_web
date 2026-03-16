@@ -434,8 +434,9 @@ _sport_move_lock = threading.Lock()
 # Flow:  Browser → HTTP POST /api/sport/move → Flask → stdin write → SSH →
 #        relay script on Jetson → /cmd_vel at 10Hz
 
-_teleop_relay_proc = None       # persistent SSH subprocess (stdin=PIPE)
-_teleop_relay_host = None       # host the relay is connected to
+_teleop_relay_proc = None       # persistent subprocess (stdin=PIPE)
+_teleop_relay_mode = None       # "local" or "ssh"
+_teleop_relay_host = None       # SSH host the relay is connected to
 _teleop_relay_lock = threading.Lock()
 _teleop_relay_deployed = False
 
@@ -483,9 +484,22 @@ if __name__ == '__main__':
     main()
 '''
 
+_LOCAL_RELAY_PATH = "/tmp/_web_teleop_relay.py"
 
-def _deploy_relay():
-    """Deploy the teleop relay script to the Jetson (idempotent)."""
+
+def _write_relay_script_local():
+    """Write relay script to /tmp locally."""
+    try:
+        with open(_LOCAL_RELAY_PATH, "w") as f:
+            f.write(_TELEOP_RELAY_SCRIPT)
+        return True
+    except Exception as e:
+        print(f"[Teleop] Failed to write local relay: {e}")
+        return False
+
+
+def _deploy_relay_ssh():
+    """Deploy the teleop relay script to the Jetson via SSH (idempotent)."""
     global _teleop_relay_deployed
     if _teleop_relay_deployed:
         return True
@@ -497,34 +511,113 @@ def _deploy_relay():
     )
     if rc == 0:
         _teleop_relay_deployed = True
-        print("[Teleop] Relay script deployed to Jetson")
+        print("[Teleop] Relay script deployed to Jetson via SSH")
         return True
-    print(f"[Teleop] Failed to deploy relay: {stderr}")
+    print(f"[Teleop] Failed to deploy relay via SSH: {stderr}")
     return False
 
 
-def _start_relay():
-    """Start the persistent teleop relay on the Jetson via SSH."""
-    global _teleop_relay_proc, _teleop_relay_host
+def _wait_for_ready(proc, timeout_sec=15):
+    """Wait for the relay process to print READY. Returns True if ready."""
+    import select
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            # Process exited — read any remaining output for diagnostics
+            try:
+                remaining = proc.stdout.read().decode()
+                if remaining:
+                    print(f"[Teleop] Relay exited early, output: {remaining[:500]}")
+            except Exception:
+                pass
+            try:
+                err = proc.stderr.read().decode() if proc.stderr else ""
+                if err:
+                    print(f"[Teleop] Relay stderr: {err[:500]}")
+            except Exception:
+                pass
+            print(f"[Teleop] Relay process exited with code {proc.returncode}")
+            return False
+        try:
+            rlist, _, _ = select.select([proc.stdout], [], [], 0.3)
+            if rlist:
+                line = proc.stdout.readline().decode().strip()
+                if line:
+                    print(f"[Teleop] Relay stdout: {line}")
+                if "READY" in line:
+                    return True
+        except Exception as e:
+            print(f"[Teleop] select error: {e}")
+            break
+    print("[Teleop] Relay did not send READY in time")
+    return False
 
-    # Already running?
-    if (_teleop_relay_proc and _teleop_relay_proc.poll() is None
-            and _teleop_relay_host == _sport_ssh_host):
+
+def _start_relay_local():
+    """Try starting the relay LOCALLY (same machine as Flask, no SSH)."""
+    global _teleop_relay_proc, _teleop_relay_mode
+
+    if not _write_relay_script_local():
+        return False
+
+    # Build command that sources ROS2 setup and runs the relay
+    # Try multiple ROS2 setup paths (humble, iron, jazzy)
+    setup_cmd = (
+        "source /opt/ros/humble/setup.bash 2>/dev/null "
+        "|| source /opt/ros/iron/setup.bash 2>/dev/null "
+        "|| source /opt/ros/jazzy/setup.bash 2>/dev/null "
+        "|| true; "
+        "source ~/go2_ws/install/setup.bash 2>/dev/null || true; "
+        + (f"export RMW_IMPLEMENTATION={RMW_IMPLEMENTATION}; " if RMW_IMPLEMENTATION else "")
+        + (f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID}; " if ROS_DOMAIN_ID else "")
+        + f"python3 -u {_LOCAL_RELAY_PATH}"
+    )
+
+    env = os.environ.copy()
+    if RMW_IMPLEMENTATION:
+        env["RMW_IMPLEMENTATION"] = RMW_IMPLEMENTATION
+    if ROS_DOMAIN_ID:
+        env["ROS_DOMAIN_ID"] = ROS_DOMAIN_ID
+    if CYCLONEDDS_URI:
+        env["CYCLONEDDS_URI"] = CYCLONEDDS_URI
+
+    print("[Teleop] Trying LOCAL relay (no SSH)...")
+    try:
+        _teleop_relay_proc = subprocess.Popen(
+            ["bash", "-c", setup_cmd],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            preexec_fn=os.setsid,
+        )
+    except Exception as e:
+        print(f"[Teleop] Failed to start local relay: {e}")
+        _teleop_relay_proc = None
+        return False
+
+    if _wait_for_ready(_teleop_relay_proc, timeout_sec=10):
+        _teleop_relay_mode = "local"
+        print("[Teleop] LOCAL relay started and ready!")
         return True
 
+    # Failed — clean up
     _kill_relay()
+    print("[Teleop] Local relay failed")
+    return False
 
-    if not _deploy_relay():
+
+def _start_relay_ssh():
+    """Start the persistent teleop relay on the Jetson via SSH."""
+    global _teleop_relay_proc, _teleop_relay_mode, _teleop_relay_host
+
+    if not _deploy_relay_ssh():
         return False
 
     remote = "python3 -u /tmp/_web_teleop_relay.py"
-    # Source .bashrc for CYCLONEDDS_URI and other env, then ROS2 setup
-    inner = (
-        "source ~/.bashrc 2>/dev/null; "
-        + _JETSON_ROS_SETUP
-        + remote
-    )
-    wrapped = f"bash -c {shlex.quote(inner)}"
+    # Use bash -i -c to load .bashrc (needed for CYCLONEDDS_URI etc.)
+    inner = _JETSON_ROS_SETUP + remote
+    wrapped = f"bash -i -c {shlex.quote(inner)}"
     cmd = [
         "sshpass", "-p", SSH_PASSWORD,
         "ssh", "-o", "StrictHostKeyChecking=no",
@@ -533,41 +626,52 @@ def _start_relay():
         _sport_ssh_host, wrapped,
     ]
 
+    print(f"[Teleop] Trying SSH relay to {_sport_ssh_host}...")
     try:
         _teleop_relay_proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             preexec_fn=os.setsid,
         )
     except Exception as e:
-        print(f"[Teleop] Failed to start relay SSH: {e}")
+        print(f"[Teleop] Failed to start SSH relay: {e}")
         _teleop_relay_proc = None
         return False
 
     _teleop_relay_host = _sport_ssh_host
 
-    # Wait for READY signal (up to 15 seconds — includes DDS discovery)
-    import select
-    deadline = time.time() + 15
-    while time.time() < deadline:
-        if _teleop_relay_proc.poll() is not None:
-            print("[Teleop] Relay process exited early")
-            _teleop_relay_proc = None
-            return False
-        try:
-            rlist, _, _ = select.select([_teleop_relay_proc.stdout], [], [], 0.2)
-            if rlist:
-                line = _teleop_relay_proc.stdout.readline().decode().strip()
-                if "READY" in line:
-                    print("[Teleop] Relay started and ready")
-                    return True
-        except Exception:
-            break
+    if _wait_for_ready(_teleop_relay_proc, timeout_sec=15):
+        _teleop_relay_mode = "ssh"
+        print(f"[Teleop] SSH relay started and ready on {_sport_ssh_host}!")
+        return True
 
-    print("[Teleop] Relay did not send READY in time")
+    # Failed — clean up
     _kill_relay()
+    print("[Teleop] SSH relay failed")
+    return False
+
+
+def _start_relay():
+    """Start the teleop relay — try local first, then SSH."""
+    global _teleop_relay_proc, _teleop_relay_mode
+
+    # Already running?
+    if _teleop_relay_proc and _teleop_relay_proc.poll() is None:
+        return True
+
+    _kill_relay()
+
+    # 1) Try local relay (no SSH — works if ROS2 is on the same machine)
+    if _start_relay_local():
+        return True
+
+    # 2) Fall back to SSH relay
+    if _start_relay_ssh():
+        return True
+
+    print("[Teleop] All relay methods failed")
     return False
 
 
@@ -584,14 +688,14 @@ def _send_vel_relay(vx, vy, vyaw):
         _teleop_relay_proc.stdin.flush()
         return True
     except (BrokenPipeError, OSError) as e:
-        print(f"[Teleop] Relay write failed: {e}")
+        print(f"[Teleop] Relay write failed ({_teleop_relay_mode}): {e}")
         _kill_relay()
         return False
 
 
 def _kill_relay():
     """Kill the teleop relay process."""
-    global _teleop_relay_proc, _teleop_relay_host
+    global _teleop_relay_proc, _teleop_relay_host, _teleop_relay_mode
     if _teleop_relay_proc:
         try:
             os.killpg(os.getpgid(_teleop_relay_proc.pid), signal.SIGTERM)
@@ -601,8 +705,10 @@ def _kill_relay():
                 os.killpg(os.getpgid(_teleop_relay_proc.pid), signal.SIGKILL)
             except Exception:
                 pass
+        print(f"[Teleop] Relay killed (was {_teleop_relay_mode})")
         _teleop_relay_proc = None
     _teleop_relay_host = None
+    _teleop_relay_mode = None
 
 # ROS2 env setup to source on the Jetson via SSH.
 # Do NOT export CYCLONEDDS_URI here – the Jetson's own DDS config (set by the
@@ -841,7 +947,19 @@ def teleop_warmup():
             ok = _start_relay()
         else:
             ok = True
-    return jsonify({"ok": ok})
+    return jsonify({"ok": ok, "mode": _teleop_relay_mode})
+
+
+@app.route("/api/teleop/status")
+def teleop_status():
+    """Return the current state of the teleop relay."""
+    alive = _teleop_relay_proc and _teleop_relay_proc.poll() is None
+    return jsonify({
+        "relay_running": alive,
+        "mode": _teleop_relay_mode,
+        "ssh_host": _sport_ssh_host,
+        "relay_host": _teleop_relay_host,
+    })
 
 
 @app.route("/api/sport/topic_type")
@@ -857,7 +975,11 @@ def sport_debug():
     relay_alive = _teleop_relay_proc and _teleop_relay_proc.poll() is None
     info = {
         "ssh_host": _sport_ssh_host,
-        "relay": {"running": relay_alive, "host": _teleop_relay_host},
+        "relay": {
+            "running": relay_alive,
+            "mode": _teleop_relay_mode,
+            "host": _teleop_relay_host,
+        },
         "checks": {},
     }
 
