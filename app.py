@@ -793,12 +793,13 @@ def _kill_relay():
     _teleop_relay_mode = None
 
 # ROS2 env setup to source on the Jetson via SSH.
-# bash -i sources ~/.bashrc which should set CYCLONEDDS_URI etc.
+# IMPORTANT: Do NOT override ROS_DOMAIN_ID from the web server — the Jetson's
+# own .bashrc / workspace setup sets the correct domain (e.g. 30 for Go2).
+# If the web server's env has no ROS_DOMAIN_ID, we must NOT reset it to 0.
 _JETSON_ROS_SETUP = (
     "source /opt/ros/humble/setup.bash 2>/dev/null || true; "
     "source ~/go2_ws/install/setup.bash 2>/dev/null; "
     f"export RMW_IMPLEMENTATION={RMW_IMPLEMENTATION}; "
-    + (f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID}; " if ROS_DOMAIN_ID else "")
 )
 
 
