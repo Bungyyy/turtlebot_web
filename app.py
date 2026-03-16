@@ -793,9 +793,7 @@ def _kill_relay():
     _teleop_relay_mode = None
 
 # ROS2 env setup to source on the Jetson via SSH.
-# Do NOT export CYCLONEDDS_URI here – the Jetson's own DDS config (set by the
-# workspace setup.bash) must be used so that the publisher can discover local
-# subscribers.  Forcing eth0-only would block loopback discovery.
+# bash -i sources ~/.bashrc which should set CYCLONEDDS_URI etc.
 _JETSON_ROS_SETUP = (
     "source /opt/ros/humble/setup.bash 2>/dev/null || true; "
     "source ~/go2_ws/install/setup.bash 2>/dev/null; "
@@ -896,12 +894,14 @@ def _sport_pub_once(api_id, params):
         return False, "Cannot resolve /api/sport/request type"
     yaml_msg = _sport_yaml(api_id, params)
     # Go2 subscriber uses BEST_EFFORT QoS — match it with --qos-reliability.
-    # Publish at 10Hz for 2s to ensure DDS discovery + delivery.
-    remote = (f"timeout 2 ros2 topic pub --rate 10 "
+    # Publish at 10Hz for 5s — DDS discovery can take 1-2s, so we need enough
+    # time for the subscriber to discover us and receive several messages.
+    remote = (f"echo '[env] RMW='$RMW_IMPLEMENTATION 'CDDS='$CYCLONEDDS_URI; "
+              f"timeout 5 ros2 topic pub --rate 10 "
               f"--qos-reliability best_effort "
               f"/api/sport/request {msg_type} {yaml_msg}")
     print(f"[Sport] SSH cmd: {remote}")
-    rc, stdout, stderr = _ssh_cmd(remote, timeout=5)
+    rc, stdout, stderr = _ssh_cmd(remote, timeout=8)
     print(f"[Sport] rc={rc} stdout={stdout!r} stderr={stderr!r}")
     # 'timeout' returns 124 when it kills the child – that's expected/success
     if rc in (0, 124):
@@ -915,10 +915,9 @@ def _sport_move_start(vx, vy, vyaw):
 
     msg_type = _resolve_sport_type() or "unitree_api/msg/Request"
     param_json = json.dumps({"x": vx, "y": vy, "rx": 0.0, "ry": 0.0, "rz": vyaw})
-    escaped = param_json.replace("'", "'\\''")
     yaml_msg = (
         "'{header: {identity: {id: 0, api_id: 1008}}, "
-        "parameter: '\"'\"'" + escaped + "'\"'\"', "
+        'parameter: "' + param_json + '", '
         "binary: []}'"
     )
     remote = (f"ros2 topic pub --rate 10 --qos-reliability best_effort "
