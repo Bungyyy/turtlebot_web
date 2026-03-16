@@ -20,6 +20,7 @@ from flask_socketio import SocketIO
 from flask_cors import CORS
 
 app = Flask(__name__)
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0  # disable static file caching
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
