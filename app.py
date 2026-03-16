@@ -725,6 +725,10 @@ def _start_relay_ssh():
     if _wait_for_ready(_teleop_relay_proc, timeout_sec=15):
         _teleop_relay_mode = "ssh"
         print(f"[Teleop] SSH relay started and ready on {_sport_ssh_host}!")
+        # Background thread to forward relay stdout for debugging
+        _relay_reader = threading.Thread(
+            target=_read_relay_output, args=(_teleop_relay_proc,), daemon=True)
+        _relay_reader.start()
         return True
 
     # Failed — clean up
@@ -755,6 +759,17 @@ def _start_relay():
 
     print("[Teleop] All relay methods failed")
     return False
+
+
+def _read_relay_output(proc):
+    """Background thread: forward relay stdout to Flask console."""
+    try:
+        while proc.poll() is None:
+            line = proc.stdout.readline()
+            if line:
+                print(f"[Relay] {line.decode().rstrip()}")
+    except Exception:
+        pass
 
 
 def _send_vel_relay(vx, vy, vyaw):
@@ -1001,11 +1016,15 @@ def sport_move():
         _sport_ssh_host = data["ssh_host"]
 
     # --- Try persistent relay first (instant response) ---
+    is_moving = vx != 0 or vy != 0 or vyaw != 0
+    if is_moving:
+        print(f"[Move] vx={vx} vy={vy} vyaw={vyaw}")
+
     with _teleop_relay_lock:
         ok = _send_vel_relay(vx, vy, vyaw)
 
     if ok:
-        action = "stop" if (vx == 0 and vy == 0 and vyaw == 0) else "move"
+        action = "stop" if not is_moving else "move"
         return jsonify({"ok": True, "action": action, "method": "relay",
                         "vx": vx, "vy": vy, "vyaw": vyaw})
 
