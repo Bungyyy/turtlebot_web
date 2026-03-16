@@ -693,6 +693,25 @@ def sport_debug():
     return jsonify(info)
 
 
+@app.route("/api/sport/test_move")
+def sport_test_move():
+    """Test: publish 0.1 m/s forward on /cmd_vel for 3 seconds via SSH.
+
+    This directly tests whether the robot responds to /cmd_vel.
+    Visit this URL and watch the robot — it should walk forward slowly.
+    """
+    rc, stdout, stderr = _ssh_cmd(
+        "timeout 3 ros2 topic pub --rate 10 /cmd_vel geometry_msgs/msg/Twist "
+        "'{linear: {x: 0.1, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}'",
+        timeout=8,
+    )
+    return jsonify({
+        "rc": rc, "stdout": stdout, "stderr": stderr,
+        "note": "Robot should have walked forward slowly for 3 seconds. "
+                "rc=124 means timeout killed it (expected/OK).",
+    })
+
+
 # ---------------------------------------------------------------------------
 # SocketIO events (thin relay – most comms go through roslibjs directly)
 # ---------------------------------------------------------------------------
