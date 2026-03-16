@@ -493,12 +493,14 @@ def _sport_yaml(api_id, params):
     """
     import json
     param_str = json.dumps(params) if isinstance(params, dict) else str(params)
-    # Use double quotes for the outer YAML to avoid SSH single-quote escaping issues
+    # Match the exact format that works when run manually on the Jetson.
+    # Single-quote the whole YAML so the inner single-quotes around parameter
+    # are escaped with the '\'' idiom (end sq, escaped sq, start sq).
+    escaped_param = param_str.replace("'", "'\\''")
     return (
-        '"{header: {identity: {id: 0, api_id: ' + str(api_id) + '}, '
-        'lease: {id: 0}, policy: {priority: 0, noreply: false}}, '
-        "parameter: '" + param_str + "', "
-        'binary: []}"'
+        "'{header: {identity: {id: 0, api_id: " + str(api_id) + "}}, "
+        "parameter: '\"'\"'" + escaped_param + "'\"'\"', "
+        "binary: []}'"
     )
 
 
@@ -508,11 +510,11 @@ def _sport_pub_once(api_id, params):
     if not msg_type:
         return False, "Cannot resolve /api/sport/request type"
     yaml_msg = _sport_yaml(api_id, params)
-    # Use 'timeout' + '--rate 10' instead of '--once' which hangs waiting
-    # for a subscriber.  This fires messages for up to 2s (~20 msgs).
-    remote = (f"timeout 2 ros2 topic pub --rate 10 "
+    # Use --once (matches the manual command that works on the Jetson).
+    # Wrap with 'timeout 5' in case --once hangs waiting for discovery.
+    remote = (f"timeout 5 ros2 topic pub --once "
               f"/api/sport/request {msg_type} {yaml_msg}")
-    rc, stdout, stderr = _ssh_cmd(remote, timeout=5)
+    rc, stdout, stderr = _ssh_cmd(remote, timeout=8)
     # 'timeout' returns 124 when it kills the child – that's expected/success
     if rc in (0, 124):
         return True, msg_type
@@ -630,9 +632,9 @@ def sport_debug():
 
         # Test publish
         yaml_msg = _sport_yaml(1004, {})
-        remote = (f"timeout 2 ros2 topic pub --rate 10 "
+        remote = (f"timeout 5 ros2 topic pub --once "
                   f"/api/sport/request {msg_type} {yaml_msg}")
-        rc, stdout, stderr = _ssh_cmd(remote, timeout=5)
+        rc, stdout, stderr = _ssh_cmd(remote, timeout=8)
         info["pub_rc"] = rc
         info["pub_stdout"] = stdout
         info["pub_stderr"] = stderr
