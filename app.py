@@ -508,9 +508,13 @@ def _sport_pub_once(api_id, params):
     if not msg_type:
         return False, "Cannot resolve /api/sport/request type"
     yaml_msg = _sport_yaml(api_id, params)
-    remote = f"ros2 topic pub --once /api/sport/request {msg_type} {yaml_msg}"
-    rc, stdout, stderr = _ssh_cmd(remote, timeout=10)
-    if rc == 0:
+    # Use 'timeout' + '--rate 10' instead of '--once' which hangs waiting
+    # for a subscriber.  This fires messages for up to 2s (~20 msgs).
+    remote = (f"timeout 2 ros2 topic pub --rate 10 "
+              f"/api/sport/request {msg_type} {yaml_msg}")
+    rc, stdout, stderr = _ssh_cmd(remote, timeout=5)
+    # 'timeout' returns 124 when it kills the child – that's expected/success
+    if rc in (0, 124):
         return True, msg_type
     return False, stderr or stdout
 
@@ -626,8 +630,9 @@ def sport_debug():
 
         # Test publish
         yaml_msg = _sport_yaml(1004, {})
-        remote = f"ros2 topic pub --once /api/sport/request {msg_type} {yaml_msg}"
-        rc, stdout, stderr = _ssh_cmd(remote, timeout=10)
+        remote = (f"timeout 2 ros2 topic pub --rate 10 "
+                  f"/api/sport/request {msg_type} {yaml_msg}")
+        rc, stdout, stderr = _ssh_cmd(remote, timeout=5)
         info["pub_rc"] = rc
         info["pub_stdout"] = stdout
         info["pub_stderr"] = stderr
