@@ -31,6 +31,7 @@ ROSBRIDGE_PORT = int(os.environ.get("ROSBRIDGE_PORT", 9090))
 WEB_PORT = int(os.environ.get("WEB_PORT", 5000))
 ROBOT_MODEL = os.environ.get("ROBOT_MODEL", "go2")
 MAP_SAVE_DIR = os.environ.get("MAP_SAVE_DIR", os.path.expanduser("~/maps"))
+SSH_PASSWORD = os.environ.get("SSH_PASSWORD", "123")  # Go2 default password
 
 # ---------------------------------------------------------------------------
 # Process Manager — launch / stop ROS2 processes from the web UI
@@ -104,11 +105,11 @@ def _kill_stale(name):
             pass
 
 
-def _launch_process(name, extra_args=None, ssh_host=None):
+def _launch_process(name, extra_args=None, ssh_host=None, ssh_password=None):
     """Launch a ROS2 process by name. Returns (ok, message).
 
-    If ssh_host is provided (e.g. 'ubuntu@192.168.1.10'), the command
-    is executed on the remote machine via SSH.
+    If ssh_host is provided (e.g. 'unitree@192.168.123.18'), the command
+    is executed on the remote machine via SSH using sshpass for password auth.
     """
     with _proc_lock:
         existing = _processes.get(name)
@@ -143,7 +144,9 @@ def _launch_process(name, extra_args=None, ssh_host=None):
             + (f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID}; " if ROS_DOMAIN_ID else "")
             + f"{remote_cmd}"
         )
-        cmd = ["ssh", "-tt", "-o", "StrictHostKeyChecking=no",
+        password = ssh_password or SSH_PASSWORD
+        cmd = ["sshpass", "-p", password,
+               "ssh", "-tt", "-o", "StrictHostKeyChecking=no",
                ssh_host, wrapped]
 
     try:
@@ -270,11 +273,12 @@ def launch_process():
     name = data.get("name", "")
     extra_args = data.get("args", [])
     ssh_host = data.get("ssh_host")
+    ssh_password = data.get("ssh_password")
 
     if not name:
         return jsonify({"ok": False, "error": "Missing process name"}), 400
 
-    ok, msg = _launch_process(name, extra_args, ssh_host)
+    ok, msg = _launch_process(name, extra_args, ssh_host, ssh_password)
     return jsonify({"ok": ok, "message": msg}), 200 if ok else 409
 
 
