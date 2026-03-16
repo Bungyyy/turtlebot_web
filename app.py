@@ -39,14 +39,25 @@ _processes = {}   # name -> { "proc": Popen, "cmd": str, "log": list }
 _proc_lock = threading.Lock()
 
 
-ROS_DOMAIN_ID = os.environ.get("ROS_DOMAIN_ID", "30")
+ROS_DOMAIN_ID = os.environ.get("ROS_DOMAIN_ID", "")
+RMW_IMPLEMENTATION = os.environ.get("RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp")
+
+# CycloneDDS config – use eth0 on the Go2 (Jetson) network
+CYCLONEDDS_URI = os.environ.get("CYCLONEDDS_URI",
+    '<CycloneDDS><Domain><General><Interfaces>'
+    '<NetworkInterface name="eth0" priority="default" multicast="default" />'
+    '</Interfaces></General></Domain></CycloneDDS>'
+)
 
 
 def _build_env():
-    """Build environment with ROBOT_MODEL and ROS_DOMAIN_ID set."""
+    """Build environment with Go2 ROS2 settings (CycloneDDS, etc.)."""
     env = os.environ.copy()
     env["ROBOT_MODEL"] = ROBOT_MODEL
-    env["ROS_DOMAIN_ID"] = ROS_DOMAIN_ID
+    env["RMW_IMPLEMENTATION"] = RMW_IMPLEMENTATION
+    env["CYCLONEDDS_URI"] = CYCLONEDDS_URI
+    if ROS_DOMAIN_ID:
+        env["ROS_DOMAIN_ID"] = ROS_DOMAIN_ID
     return env
 
 
@@ -120,13 +131,17 @@ def _launch_process(name, extra_args=None, ssh_host=None):
         # Source ROS2 environment on the remote machine since SSH
         # non-interactive shells don't load .bashrc
         wrapped = (
-            "source /opt/ros/humble/setup.bash 2>/dev/null || "
-            "source /opt/ros/foxy/setup.bash 2>/dev/null || true; "
-            "source ~/go2_ws/install/setup.bash 2>/dev/null || "
-            "source ~/unitree_ws/install/setup.bash 2>/dev/null || true; "
-            f"export ROBOT_MODEL={ROBOT_MODEL}; "
-            f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID}; "
-            f"{remote_cmd}"
+            "export PATH=/usr/local/cuda-11.4/bin:$PATH; "
+            "export LD_LIBRARY_PATH=/usr/local/cuda-11.4/lib64:$LD_LIBRARY_PATH; "
+            "export CPATH=/usr/local/cuda/include:$CPATH; "
+            "source /opt/ros/humble/setup.bash 2>/dev/null || true; "
+            "source /usr/share/colcon_argcomplete/hook/colcon-argcomplete.bash 2>/dev/null || true; "
+            "source ~/3d_ws/install/setup.bash 2>/dev/null || "
+            "source ~/go2_ws/install/setup.bash 2>/dev/null || true; "
+            f"export RMW_IMPLEMENTATION={RMW_IMPLEMENTATION}; "
+            f"export CYCLONEDDS_URI='{CYCLONEDDS_URI}'; "
+            + (f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID}; " if ROS_DOMAIN_ID else "")
+            + f"{remote_cmd}"
         )
         cmd = ["ssh", "-tt", "-o", "StrictHostKeyChecking=no",
                ssh_host, wrapped]
