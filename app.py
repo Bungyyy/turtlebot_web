@@ -512,12 +512,13 @@ def _sport_pub_once(api_id, params):
     if not msg_type:
         return False, "Cannot resolve /api/sport/request type"
     yaml_msg = _sport_yaml(api_id, params)
-    # Use --once (matches the manual command that works on the Jetson).
-    # Wrap with 'timeout 5' in case --once hangs waiting for discovery.
-    remote = (f"timeout 5 ros2 topic pub --once "
+    # Don't use --once: it waits for subscriber discovery which fails in
+    # non-interactive SSH sessions.  Instead, publish continuously at 10Hz and
+    # let 'timeout' kill it after 2s – enough for messages to reach the topic.
+    remote = (f"timeout 2 ros2 topic pub --rate 10 "
               f"/api/sport/request {msg_type} {yaml_msg}")
     print(f"[Sport] SSH cmd: {remote}")
-    rc, stdout, stderr = _ssh_cmd(remote, timeout=8)
+    rc, stdout, stderr = _ssh_cmd(remote, timeout=5)
     print(f"[Sport] rc={rc} stdout={stdout!r} stderr={stderr!r}")
     # 'timeout' returns 124 when it kills the child – that's expected/success
     if rc in (0, 124):
