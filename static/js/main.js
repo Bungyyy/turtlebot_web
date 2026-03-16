@@ -159,6 +159,13 @@
     if (res.ok) {
       btn.textContent = "Stop ROS Bridge";
       _setStatus("ROS Bridge started — connecting...");
+      // Auto-set rosbridge host to the robot IP from SSH host field
+      const sshHost = document.getElementById("ssh-host").value.trim();
+      if (sshHost) {
+        const ip = sshHost.includes("@") ? sshHost.split("@")[1] : sshHost;
+        const rbHostInput = document.getElementById("setting-rosbridge-host");
+        if (rbHostInput && ip) rbHostInput.value = ip;
+      }
       setTimeout(_connect, 2000);
     } else {
       btn.textContent = "Start ROS Bridge";
