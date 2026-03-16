@@ -1,8 +1,9 @@
 /**
- * Map Viewer – map-centric rendering for Unitree Go2.
+ * Map Viewer – map-centric rendering for Unitree Go2 via ROS Bridge.
  * The occupancy grid auto-fits to fill the canvas.
  * Robot, laser/LiDAR, path overlays are positioned using the map's coordinate system.
  * Supports FAST-LIO2 3D mapping with pointcloud_to_laserscan conversion.
+ * Robot rendered as quadruped shape (rectangle with legs).
  */
 
 /* global RosBridge, ROSLIB */
@@ -568,7 +569,7 @@ const MapViewer = (() => {
     }
   }
 
-  // ---- Robot (green triangle like reference) ----------------------------
+  // ---- Robot (quadruped shape for Go2) ----------------------------------
 
   function _drawRobot() {
     const { cx, cy } = _worldToCanvas(robotPose.x, robotPose.y);
@@ -578,19 +579,42 @@ const MapViewer = (() => {
     ctx.translate(cx, cy);
     ctx.rotate(-robotPose.theta);
 
+    // Body (rounded rectangle)
+    const bw = sz * 1.6, bh = sz * 0.9;
     ctx.beginPath();
-    ctx.moveTo(sz, 0);
-    ctx.lineTo(-sz * 0.6, -sz * 0.55);
-    ctx.lineTo(-sz * 0.6,  sz * 0.55);
-    ctx.closePath();
+    ctx.roundRect(-bw/2, -bh/2, bw, bh, 3);
     ctx.fillStyle = "#22c55e";
     ctx.fill();
     ctx.strokeStyle = "#fff";
     ctx.lineWidth = 2;
     ctx.stroke();
 
+    // Heading indicator (front arrow)
     ctx.beginPath();
-    ctx.arc(0, 0, 3, 0, Math.PI * 2);
+    ctx.moveTo(bw/2, 0);
+    ctx.lineTo(bw/2 + 6, 0);
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    // Four legs (small circles at corners)
+    const legR = 3;
+    const legPositions = [
+      { x: bw/2 - 2, y: -bh/2 - legR + 1 },   // front-left
+      { x: bw/2 - 2, y:  bh/2 + legR - 1 },    // front-right
+      { x: -bw/2 + 2, y: -bh/2 - legR + 1 },   // rear-left
+      { x: -bw/2 + 2, y:  bh/2 + legR - 1 },   // rear-right
+    ];
+    ctx.fillStyle = "#16a34a";
+    for (const lp of legPositions) {
+      ctx.beginPath();
+      ctx.arc(lp.x, lp.y, legR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Center dot
+    ctx.beginPath();
+    ctx.arc(0, 0, 2.5, 0, Math.PI * 2);
     ctx.fillStyle = "#fff";
     ctx.fill();
 

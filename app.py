@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Unitree Go2 Web Control Interface - Flask Application Server.
+"""Unitree Go2 Web Teleop — Flask Application Server.
 
-Serves the web UI and proxies the camera feed from ROS.
-The frontend connects directly to rosbridge_websocket for
-all ROS topic/service communication.
+ROS Bridge-first architecture:
+  - Frontend publishes /cmd_vel directly via rosbridge WebSocket (primary, zero latency)
+  - Backend provides SSH relay as fallback when rosbridge is unavailable
+  - Sport API commands (StandUp, StandDown, etc.) via rosbridge or SSH
 
-Includes a Launch Manager for starting/stopping ROS2 processes
-(bringup, SLAM/FAST-LIO2, navigation, rosbridge) from the web UI.
+Features:
+  - Launch Manager: start/stop ROS2 processes (bringup, SLAM, navigation, rosbridge)
+  - Persistent teleop relay: SSH-based /cmd_vel publisher for fallback
+  - Map management: save/load maps for navigation
+  - Camera stream proxy
 """
 
 import os
@@ -258,7 +262,20 @@ def config():
         "robot_model": ROBOT_MODEL,
         "map_save_dir": MAP_SAVE_DIR,
         "ros_domain_id": ROS_DOMAIN_ID,
+        "teleop_mode": "rosbridge_primary",
     })
+
+
+@app.route("/api/rosbridge/status")
+def rosbridge_status():
+    """Check if rosbridge is reachable (for frontend to decide teleop mode)."""
+    import socket
+    try:
+        s = socket.create_connection((ROSBRIDGE_HOST, ROSBRIDGE_PORT), timeout=2)
+        s.close()
+        return jsonify({"ok": True, "host": ROSBRIDGE_HOST, "port": ROSBRIDGE_PORT})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 
 
 # ---------------------------------------------------------------------------

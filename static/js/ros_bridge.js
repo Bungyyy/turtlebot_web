@@ -1,7 +1,9 @@
 /**
- * ROS Bridge Connection Manager
+ * ROS Bridge Connection Manager — Unitree Go2 Teleop
  * Handles connection to rosbridge_websocket and provides
- * topic/service/action wrappers used by other modules.
+ * topic/service/action wrappers used by all modules.
+ *
+ * Primary teleop path: controls.js -> RosBridge.advertise("/cmd_vel") -> rosbridge -> robot
  */
 
 /* global ROSLIB */
