@@ -69,7 +69,7 @@ LAUNCH_COMMANDS = {
         "rosbridge_websocket_launch.xml",
     ],
     "bringup": [
-        "ros2", "launch", "go2_bringup", "robot.launch.py",
+        "ros2", "launch", "go2_bringup", "bringup.launch",
     ],
     "slam": [
         "ros2", "launch", "fast_lio", "mapping.launch.py",
