@@ -26,6 +26,12 @@ const Controls = (() => {
     // Emergency stop
     document.getElementById("btn-emergency-stop").addEventListener("click", _emergencyStop);
 
+    // Unitree Go2 Sport Mode buttons
+    document.getElementById("btn-stand-up").addEventListener("click", () => _sportCmd(1004, "StandUp"));
+    document.getElementById("btn-stand-down").addEventListener("click", () => _sportCmd(1005, "StandDown"));
+    document.getElementById("btn-recovery-stand").addEventListener("click", () => _sportCmd(1006, "RecoveryStand"));
+    document.getElementById("btn-damp").addEventListener("click", () => _sportCmd(1001, "Damp"));
+
     // Speed slider labels
     document.getElementById("linear-speed").addEventListener("input", (e) => {
       document.getElementById("linear-speed-val").textContent = parseFloat(e.target.value).toFixed(2);
@@ -168,6 +174,19 @@ const Controls = (() => {
     if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","w","a","s","d"].includes(e.key)) {
       _stop();
     }
+  }
+
+  // ---- Unitree Go2 Sport Mode ------------------------------------------
+
+  function _sportCmd(apiId, label) {
+    const msg = {
+      header: { identity: { id: Date.now() % 2147483647, api_id: apiId } },
+      parameter: JSON.stringify({}),
+      api_id: apiId,
+    };
+    RosBridge.publish("/api/sport/request", "unitree_api/msg/Request", msg);
+    document.getElementById("status-message").textContent = "Sport: " + label;
+    console.log("[Controls] Sport command:", label, "api_id:", apiId);
   }
 
   return { init, start, stop };
