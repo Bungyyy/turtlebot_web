@@ -1,5 +1,5 @@
 /**
- * Robot Teleop Controls
+ * Unitree Go2 Teleop Controls
  * Handles D-pad, keyboard, and emergency stop.
  * Publishes geometry_msgs/Twist to /cmd_vel.
  */

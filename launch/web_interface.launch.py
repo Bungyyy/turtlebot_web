@@ -1,5 +1,5 @@
 """
-ROS2 Humble Launch file for TurtleBot3 Web Interface.
+ROS2 Humble Launch file for Unitree Go2 Web Interface.
 
 Launches:
   1. rosbridge_websocket (for browser <-> ROS2 communication)
@@ -52,7 +52,7 @@ def generate_launch_description():
     return LaunchDescription(
         [
             rosbridge_port_arg,
-            LogInfo(msg="Starting TurtleBot3 Web Interface (ROS2 Humble)..."),
+            LogInfo(msg="Starting Unitree Go2 Web Interface (ROS2 Humble)..."),
             rosbridge_launch,
             rosapi_node,
         ]
