@@ -458,37 +458,78 @@ _teleop_relay_lock = threading.Lock()
 _teleop_relay_deployed = False
 
 _TELEOP_RELAY_SCRIPT = r'''#!/usr/bin/env python3
-"""Teleop relay: reads JSON velocity from stdin, publishes /cmd_vel at 10Hz.
+"""Teleop relay for Unitree Go2.
+
+Reads JSON velocity from stdin, publishes to BOTH:
+  1. /api/sport/request (unitree_api/msg/Request, api_id=1008 Move) — Go2 native
+  2. /cmd_vel (geometry_msgs/msg/Twist) — fallback/bridge compatibility
+
+The Go2 firmware ONLY listens to /api/sport/request for movement.
+/cmd_vel has 0 subscribers by default on Go2, but we publish it anyway
+in case a cmd_vel bridge node is running.
 
 IMPORTANT: rclpy.spin() MUST run in the main thread for timers to fire.
-stdin reading runs in a background thread.
 """
 import os, sys, json, threading
 import rclpy
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 from geometry_msgs.msg import Twist
 
 def main():
-    # Print environment for debugging DDS issues
     print(f"[relay] PID={os.getpid()}", flush=True)
     print(f"[relay] RMW={os.environ.get('RMW_IMPLEMENTATION','(unset)')}", flush=True)
     print(f"[relay] ROS_DOMAIN_ID={os.environ.get('ROS_DOMAIN_ID','(unset)')}", flush=True)
-    print(f"[relay] CYCLONEDDS_URI={os.environ.get('CYCLONEDDS_URI','(unset)')[:80]}", flush=True)
+    cdds = os.environ.get('CYCLONEDDS_URI','(unset)')
+    print(f"[relay] CYCLONEDDS_URI={cdds[:80] if cdds else '(unset)'}", flush=True)
 
     rclpy.init()
     node = rclpy.create_node('web_teleop_relay')
-    pub = node.create_publisher(Twist, '/cmd_vel', 10)
+
+    # cmd_vel publisher (fallback — 0 subscribers on stock Go2)
+    cmd_vel_pub = node.create_publisher(Twist, '/cmd_vel', 10)
+
+    # Sport API publisher — Go2 subscriber uses BEST_EFFORT QoS
+    sport_pub = None
+    try:
+        from unitree_api.msg import Request
+        sport_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        sport_pub = node.create_publisher(Request, '/api/sport/request', sport_qos)
+        print("[relay] Sport API publisher created (unitree_api/msg/Request)", flush=True)
+    except ImportError:
+        print("[relay] WARNING: unitree_api not found — using cmd_vel only", flush=True)
+
     vel = [0.0, 0.0, 0.0]  # vx, vy, vyaw
     pub_count = [0]
 
     def timer_cb():
+        vx, vy, vyaw = vel
+
+        # 1. Publish Sport API Move (api_id=1008) — primary path for Go2
+        if sport_pub:
+            try:
+                from unitree_api.msg import Request
+                req = Request()
+                req.header.identity.api_id = 1008  # Move
+                req.parameter = json.dumps({
+                    "x": vx, "y": vy,
+                    "rx": 0.0, "ry": 0.0, "rz": vyaw
+                })
+                sport_pub.publish(req)
+            except Exception as e:
+                if pub_count[0] < 3:
+                    print(f"[relay] sport pub error: {e}", flush=True)
+
+        # 2. Publish cmd_vel (fallback)
         m = Twist()
-        m.linear.x = vel[0]
-        m.linear.y = vel[1]
-        m.angular.z = vel[2]
-        pub.publish(m)
+        m.linear.x = vx
+        m.linear.y = vy
+        m.angular.z = vyaw
+        cmd_vel_pub.publish(m)
+
         pub_count[0] += 1
         if pub_count[0] <= 3 or pub_count[0] % 100 == 0:
-            print(f"[relay] pub #{pub_count[0]}: vx={vel[0]} vy={vel[1]} vyaw={vel[2]}", flush=True)
+            mode = "sport+cmd_vel" if sport_pub else "cmd_vel only"
+            print(f"[relay] pub #{pub_count[0]} ({mode}): vx={vx} vy={vy} vyaw={vyaw}", flush=True)
 
     node.create_timer(0.1, timer_cb)
 
@@ -506,7 +547,6 @@ def main():
                 print(f"[relay] recv: vx={vel[0]} vy={vel[1]} vyaw={vel[2]}", flush=True)
             except Exception as e:
                 print(f"[relay] parse error: {e}", flush=True)
-        # stdin closed — stop spinning
         print("[relay] stdin closed, shutting down", flush=True)
         rclpy.shutdown()
 
@@ -514,7 +554,6 @@ def main():
 
     print("READY", flush=True)
 
-    # Spin in main thread — this is required for timers to fire
     try:
         rclpy.spin(node)
     except Exception:
@@ -849,10 +888,10 @@ def _sport_pub_once(api_id, params):
     if not msg_type:
         return False, "Cannot resolve /api/sport/request type"
     yaml_msg = _sport_yaml(api_id, params)
-    # Don't use --once: it waits for subscriber discovery which fails in
-    # non-interactive SSH sessions.  Instead, publish continuously at 10Hz and
-    # let 'timeout' kill it after 2s – enough for messages to reach the topic.
+    # Go2 subscriber uses BEST_EFFORT QoS — match it with --qos-reliability.
+    # Publish at 10Hz for 2s to ensure DDS discovery + delivery.
     remote = (f"timeout 2 ros2 topic pub --rate 10 "
+              f"--qos-reliability best_effort "
               f"/api/sport/request {msg_type} {yaml_msg}")
     print(f"[Sport] SSH cmd: {remote}")
     rc, stdout, stderr = _ssh_cmd(remote, timeout=5)
@@ -864,22 +903,25 @@ def _sport_pub_once(api_id, params):
 
 
 def _sport_move_start(vx, vy, vyaw):
-    """Start a persistent velocity publisher on the Jetson at 10Hz via /cmd_vel."""
+    """Start a persistent velocity publisher on the Jetson via Sport API Move."""
     global _sport_move_proc
 
-    # Use standard geometry_msgs/msg/Twist on /cmd_vel — same as teleop_twist_keyboard.
-    # This works reliably with bringup.launch and avoids sport API DDS discovery issues.
+    msg_type = _resolve_sport_type() or "unitree_api/msg/Request"
+    param_json = json.dumps({"x": vx, "y": vy, "rx": 0.0, "ry": 0.0, "rz": vyaw})
+    escaped = param_json.replace("'", "'\\''")
     yaml_msg = (
-        "'{linear: {x: " + str(vx) + ", y: " + str(vy) + ", z: 0.0}, "
-        "angular: {x: 0.0, y: 0.0, z: " + str(vyaw) + "}}'"
+        "'{header: {identity: {id: 0, api_id: 1008}}, "
+        "parameter: '\"'\"'" + escaped + "'\"'\"', "
+        "binary: []}'"
     )
-    remote = f"ros2 topic pub --rate 10 /cmd_vel geometry_msgs/msg/Twist {yaml_msg}"
+    remote = (f"ros2 topic pub --rate 10 --qos-reliability best_effort "
+              f"/api/sport/request {msg_type} {yaml_msg}")
 
     with _sport_move_lock:
         _kill_sport_move_proc()
         try:
             _sport_move_proc = _ssh_popen(remote)
-            print(f"[Sport] Move started via /cmd_vel: vx={vx} vy={vy} vyaw={vyaw}")
+            print(f"[Sport] Move started via sport API: vx={vx} vy={vy} vyaw={vyaw}")
         except Exception as e:
             print(f"[Sport] Move start failed: {e}")
 
@@ -960,15 +1002,12 @@ def sport_move():
         return jsonify({"ok": True, "action": action, "method": "relay",
                         "vx": vx, "vy": vy, "vyaw": vyaw})
 
-    # --- Fallback: legacy per-SSH ros2 topic pub ---
+    # --- Fallback: legacy per-SSH ros2 topic pub via Sport API ---
     print("[Teleop] Relay unavailable, falling back to legacy SSH method")
     if vx == 0 and vy == 0 and vyaw == 0:
         _sport_move_stop()
-        _ssh_cmd(
-            "ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "
-            "'{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}'",
-            timeout=5,
-        )
+        # Send StopMove (1003) via sport API
+        _sport_pub_once(1003, {})
         return jsonify({"ok": True, "action": "stop", "method": "legacy"})
     else:
         _sport_move_start(vx, vy, vyaw)
