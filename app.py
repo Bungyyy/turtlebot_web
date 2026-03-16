@@ -476,6 +476,10 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from geometry_msgs.msg import Twist
 
 def main():
+    # Force ROS_DOMAIN_ID=30 for Go2 — shell exports via SSH may not survive
+    # shlex quoting / bash -i -c wrapping, so we set it in Python directly.
+    os.environ.setdefault('ROS_DOMAIN_ID', '30')
+
     print(f"[relay] PID={os.getpid()}", flush=True)
     print(f"[relay] RMW={os.environ.get('RMW_IMPLEMENTATION','(unset)')}", flush=True)
     print(f"[relay] ROS_DOMAIN_ID={os.environ.get('ROS_DOMAIN_ID','(unset)')}", flush=True)
@@ -913,7 +917,7 @@ def _sport_pub_once(api_id, params):
     # Go2 subscriber uses BEST_EFFORT QoS — match it with --qos-reliability.
     # Publish at 10Hz for 5s — DDS discovery can take 1-2s, so we need enough
     # time for the subscriber to discover us and receive several messages.
-    remote = (f"echo '[env] RMW='$RMW_IMPLEMENTATION 'CDDS='$CYCLONEDDS_URI; "
+    remote = (f"echo '[env] RMW='$RMW_IMPLEMENTATION 'DOMAIN='$ROS_DOMAIN_ID 'CDDS='$CYCLONEDDS_URI; "
               f"timeout 5 ros2 topic pub --rate 10 "
               f"--qos-reliability best_effort "
               f"/api/sport/request {msg_type} {yaml_msg}")
