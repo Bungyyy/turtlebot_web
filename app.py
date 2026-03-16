@@ -441,16 +441,27 @@ _teleop_relay_lock = threading.Lock()
 _teleop_relay_deployed = False
 
 _TELEOP_RELAY_SCRIPT = r'''#!/usr/bin/env python3
-"""Teleop relay: reads JSON velocity from stdin, publishes /cmd_vel at 10Hz."""
-import sys, json, threading
+"""Teleop relay: reads JSON velocity from stdin, publishes /cmd_vel at 10Hz.
+
+IMPORTANT: rclpy.spin() MUST run in the main thread for timers to fire.
+stdin reading runs in a background thread.
+"""
+import os, sys, json, threading
 import rclpy
 from geometry_msgs.msg import Twist
 
 def main():
+    # Print environment for debugging DDS issues
+    print(f"[relay] PID={os.getpid()}", flush=True)
+    print(f"[relay] RMW={os.environ.get('RMW_IMPLEMENTATION','(unset)')}", flush=True)
+    print(f"[relay] ROS_DOMAIN_ID={os.environ.get('ROS_DOMAIN_ID','(unset)')}", flush=True)
+    print(f"[relay] CYCLONEDDS_URI={os.environ.get('CYCLONEDDS_URI','(unset)')[:80]}", flush=True)
+
     rclpy.init()
     node = rclpy.create_node('web_teleop_relay')
     pub = node.create_publisher(Twist, '/cmd_vel', 10)
     vel = [0.0, 0.0, 0.0]  # vx, vy, vyaw
+    pub_count = [0]
 
     def timer_cb():
         m = Twist()
@@ -458,27 +469,40 @@ def main():
         m.linear.y = vel[1]
         m.angular.z = vel[2]
         pub.publish(m)
+        pub_count[0] += 1
+        if pub_count[0] <= 3 or pub_count[0] % 100 == 0:
+            print(f"[relay] pub #{pub_count[0]}: vx={vel[0]} vy={vel[1]} vyaw={vel[2]}", flush=True)
 
     node.create_timer(0.1, timer_cb)
-    threading.Thread(target=rclpy.spin, args=(node,), daemon=True).start()
 
-    sys.stdout.write('READY\n')
-    sys.stdout.flush()
+    # Read stdin in background thread (main thread must run rclpy.spin)
+    def stdin_reader():
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+                vel[0] = float(d.get('vx', 0))
+                vel[1] = float(d.get('vy', 0))
+                vel[2] = float(d.get('vyaw', 0))
+                print(f"[relay] recv: vx={vel[0]} vy={vel[1]} vyaw={vel[2]}", flush=True)
+            except Exception as e:
+                print(f"[relay] parse error: {e}", flush=True)
+        # stdin closed — stop spinning
+        print("[relay] stdin closed, shutting down", flush=True)
+        rclpy.shutdown()
 
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            d = json.loads(line)
-            vel[0] = float(d.get('vx', 0))
-            vel[1] = float(d.get('vy', 0))
-            vel[2] = float(d.get('vyaw', 0))
-        except Exception:
-            pass
+    threading.Thread(target=stdin_reader, daemon=True).start()
 
+    print("READY", flush=True)
+
+    # Spin in main thread — this is required for timers to fire
+    try:
+        rclpy.spin(node)
+    except Exception:
+        pass
     node.destroy_node()
-    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
@@ -655,13 +679,15 @@ def _start_relay_ssh():
 
 def _start_relay():
     """Start the teleop relay — try local first, then SSH."""
-    global _teleop_relay_proc, _teleop_relay_mode
+    global _teleop_relay_proc, _teleop_relay_mode, _teleop_relay_deployed
 
     # Already running?
     if _teleop_relay_proc and _teleop_relay_proc.poll() is None:
         return True
 
     _kill_relay()
+    # Force re-deploy to pick up any script changes
+    _teleop_relay_deployed = False
 
     # 1) Try local relay (no SSH — works if ROS2 is on the same machine)
     if _start_relay_local():
