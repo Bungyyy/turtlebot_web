@@ -1018,29 +1018,21 @@ def sport_move():
     if data.get("ssh_host"):
         _sport_ssh_host = data["ssh_host"]
 
-    # --- Try persistent relay first (instant response) ---
     is_moving = vx != 0 or vy != 0 or vyaw != 0
-    if is_moving:
-        print(f"[Move] vx={vx} vy={vy} vyaw={vyaw}")
 
-    with _teleop_relay_lock:
-        ok = _send_vel_relay(vx, vy, vyaw)
-
-    if ok:
-        action = "stop" if not is_moving else "move"
-        return jsonify({"ok": True, "action": action, "method": "relay",
-                        "vx": vx, "vy": vy, "vyaw": vyaw})
-
-    # --- Fallback: legacy per-SSH ros2 topic pub via Sport API ---
-    print("[Teleop] Relay unavailable, falling back to legacy SSH method")
-    if vx == 0 and vy == 0 and vyaw == 0:
+    # --- Use legacy SSH ros2-topic-pub for movement (more reliable) ---
+    # The persistent relay has issues with DDS publishing; use the same
+    # mechanism as StandUp/StandDown which works reliably.
+    if not is_moving:
         _sport_move_stop()
-        # Send StopMove (1003) via sport API
-        _sport_pub_once(1003, {})
-        return jsonify({"ok": True, "action": "stop", "method": "legacy"})
+        # Also write zero to relay if running (keeps relay alive)
+        with _teleop_relay_lock:
+            _send_vel_relay(0, 0, 0)
+        return jsonify({"ok": True, "action": "stop", "method": "sport_api"})
     else:
+        print(f"[Move] Sport API Move: vx={vx} vy={vy} vyaw={vyaw}")
         _sport_move_start(vx, vy, vyaw)
-        return jsonify({"ok": True, "action": "move", "method": "legacy",
+        return jsonify({"ok": True, "action": "move", "method": "sport_api",
                         "vx": vx, "vy": vy, "vyaw": vyaw})
 
 
