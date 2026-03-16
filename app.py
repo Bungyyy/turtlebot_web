@@ -476,10 +476,6 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from geometry_msgs.msg import Twist
 
 def main():
-    # Force ROS_DOMAIN_ID=30 for Go2 — shell exports via SSH may not survive
-    # shlex quoting / bash -i -c wrapping, so we set it in Python directly.
-    os.environ.setdefault('ROS_DOMAIN_ID', '30')
-
     print(f"[relay] PID={os.getpid()}", flush=True)
     print(f"[relay] RMW={os.environ.get('RMW_IMPLEMENTATION','(unset)')}", flush=True)
     print(f"[relay] ROS_DOMAIN_ID={os.environ.get('ROS_DOMAIN_ID','(unset)')}", flush=True)
@@ -508,12 +504,8 @@ def main():
     def timer_cb():
         vx, vy, vyaw = vel
 
-        # Skip publishing when velocity is zero — continuous Move(0,0,0)
-        # at 10Hz overrides StandUp/StandDown/Damp commands from the sport API.
-        is_moving = (vx != 0.0 or vy != 0.0 or vyaw != 0.0)
-
         # 1. Publish Sport API Move (api_id=1008) — primary path for Go2
-        if sport_pub and is_moving:
+        if sport_pub:
             try:
                 from unitree_api.msg import Request
                 req = Request()
@@ -527,13 +519,12 @@ def main():
                 if pub_count[0] < 3:
                     print(f"[relay] sport pub error: {e}", flush=True)
 
-        # 2. Publish cmd_vel (fallback) — only when moving
-        if is_moving:
-            m = Twist()
-            m.linear.x = vx
-            m.linear.y = vy
-            m.angular.z = vyaw
-            cmd_vel_pub.publish(m)
+        # 2. Publish cmd_vel (fallback)
+        m = Twist()
+        m.linear.x = vx
+        m.linear.y = vy
+        m.angular.z = vyaw
+        cmd_vel_pub.publish(m)
 
         pub_count[0] += 1
         if pub_count[0] <= 3 or pub_count[0] % 100 == 0:
@@ -922,7 +913,7 @@ def _sport_pub_once(api_id, params):
     # Go2 subscriber uses BEST_EFFORT QoS — match it with --qos-reliability.
     # Publish at 10Hz for 5s — DDS discovery can take 1-2s, so we need enough
     # time for the subscriber to discover us and receive several messages.
-    remote = (f"echo '[env] RMW='$RMW_IMPLEMENTATION 'DOMAIN='$ROS_DOMAIN_ID 'CDDS='$CYCLONEDDS_URI; "
+    remote = (f"echo '[env] RMW='$RMW_IMPLEMENTATION 'CDDS='$CYCLONEDDS_URI; "
               f"timeout 5 ros2 topic pub --rate 10 "
               f"--qos-reliability best_effort "
               f"/api/sport/request {msg_type} {yaml_msg}")
@@ -995,10 +986,9 @@ def sport_command():
         _sport_ssh_host = data["ssh_host"]
 
     _sport_move_stop()
-    # Kill the relay entirely — its persistent DDS publisher on domain 30
-    # can interfere with the one-shot ros2 topic pub from SSH.
-    # The relay will be auto-restarted on the next /api/sport/move call.
-    _kill_relay()
+    # Stop relay velocity too (e.g., Damp should stop all motion)
+    with _teleop_relay_lock:
+        _send_vel_relay(0, 0, 0)
 
     ok, detail = _sport_pub_once(api_id, parameter)
     label = data.get("label", str(api_id))
