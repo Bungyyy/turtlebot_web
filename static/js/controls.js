@@ -2,14 +2,14 @@
  * Unitree Go2 Teleop Controls
  * Handles D-pad, keyboard, and emergency stop.
  *
- * Movement: sends velocity via SocketIO → backend → ros2 topic pub at 10Hz
+ * Movement: HTTP POST /api/sport/move → backend → persistent ros2 topic pub at 10Hz
  *           (Sport API Move, api_id 1008 — required for Go2 AI mode)
  * Also publishes /cmd_vel via rosbridge as fallback for nav2 mode.
  *
- * Sport commands (stand, lie down, etc.): via SocketIO → backend → ros2 topic pub --once
+ * Sport commands (stand, lie down, etc.): HTTP POST /api/sport
  */
 
-/* global RosBridge, ROSLIB, io */
+/* global RosBridge, ROSLIB */
 /* exported Controls */
 
 const Controls = (() => {
@@ -19,7 +19,6 @@ const Controls = (() => {
   let enabled = false;
   let estopActive = false;
   let estopBurstTimer = null;
-  let socket = null;
 
   // Sport API IDs
   const API_DAMP      = 1001;
@@ -29,12 +28,6 @@ const Controls = (() => {
   const API_RECOVERY  = 1006;
 
   function init() {
-    // Connect SocketIO for sport commands
-    socket = io();
-    socket.on("connect", () => console.log("[Controls] SocketIO connected, id:", socket.id));
-    socket.on("connect_error", (err) => console.error("[Controls] SocketIO connect error:", err));
-    socket.on("disconnect", (reason) => console.warn("[Controls] SocketIO disconnected:", reason));
-
     // D-pad button events (mouse + touch)
     _bindBtn("btn-forward",  () => _setVel( _linSpeed(), 0, 0));
     _bindBtn("btn-backward", () => _setVel(-_linSpeed(), 0, 0));
@@ -106,15 +99,15 @@ const Controls = (() => {
     if (!enabled) return;
     currentVel = { vx, vy, vyaw };
 
-    // Send to backend via SocketIO → ros2 topic pub at 10Hz (Sport API)
-    if (socket) socket.emit("sport_move", currentVel);
+    // Start persistent 10Hz publisher on backend via HTTP
+    _httpPost("/api/sport/move", currentVel);
   }
 
   function _stop() {
     currentVel = { vx: 0, vy: 0, vyaw: 0 };
 
     // Stop the persistent velocity publisher on backend
-    if (socket) socket.emit("sport_move", { vx: 0, vy: 0, vyaw: 0 });
+    _httpPost("/api/sport/move", { vx: 0, vy: 0, vyaw: 0 });
 
     // Also stop via cmd_vel
     if (cmdVelTopic) {
@@ -166,14 +159,34 @@ const Controls = (() => {
     document.getElementById("status-message").textContent = "EMERGENCY STOP activated";
   }
 
-  // ---- Sport Commands (one-shot) ----------------------------------------
+  // ---- Sport Commands (one-shot via HTTP) --------------------------------
 
   function _sportCmd(apiId, label) {
-    if (socket) {
-      socket.emit("sport_cmd", { api_id: apiId, label: label });
-    }
+    _httpPost("/api/sport", { api_id: apiId, label: label })
+      .then((res) => {
+        if (res.ok) {
+          console.log("[Controls] Sport OK:", label, "type:", res.type);
+        } else {
+          console.error("[Controls] Sport FAIL:", label, res.error);
+        }
+      });
     document.getElementById("status-message").textContent = "Sport: " + label;
     console.log("[Controls] Sport command:", label, "api_id:", apiId);
+  }
+
+  // ---- HTTP helper -------------------------------------------------------
+
+  function _httpPost(url, body) {
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then((r) => r.json())
+      .catch((err) => {
+        console.error("[Controls] HTTP error:", url, err);
+        return { ok: false, error: String(err) };
+      });
   }
 
   // ---- Button helpers ---------------------------------------------------
