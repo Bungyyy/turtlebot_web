@@ -427,6 +427,7 @@ _sport_move_lock = threading.Lock()
 _JETSON_ROS_SETUP = (
     "source /opt/ros/humble/setup.bash 2>/dev/null || true; "
     "source ~/go2_ws/install/setup.bash 2>/dev/null; "
+    f"export RMW_IMPLEMENTATION={RMW_IMPLEMENTATION}; "
     + (f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID}; " if ROS_DOMAIN_ID else "")
 )
 
@@ -515,7 +516,9 @@ def _sport_pub_once(api_id, params):
     # Wrap with 'timeout 5' in case --once hangs waiting for discovery.
     remote = (f"timeout 5 ros2 topic pub --once "
               f"/api/sport/request {msg_type} {yaml_msg}")
+    print(f"[Sport] SSH cmd: {remote}")
     rc, stdout, stderr = _ssh_cmd(remote, timeout=8)
+    print(f"[Sport] rc={rc} stdout={stdout!r} stderr={stderr!r}")
     # 'timeout' returns 124 when it kills the child – that's expected/success
     if rc in (0, 124):
         return True, msg_type
