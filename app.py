@@ -10,6 +10,7 @@ Includes a Launch Manager for starting/stopping ROS2 processes
 """
 
 import os
+import shlex
 import signal
 import subprocess
 import threading
@@ -434,7 +435,10 @@ _JETSON_ROS_SETUP = (
 
 def _ssh_cmd(remote_cmd, timeout=8):
     """Run a command on the Jetson via SSH. Returns (returncode, stdout, stderr)."""
-    wrapped = _JETSON_ROS_SETUP + remote_cmd
+    # Use 'bash -i -c' to force interactive mode so that ~/.bashrc is sourced.
+    # This picks up env vars (CYCLONEDDS_URI, etc.) needed for DDS discovery.
+    inner = _JETSON_ROS_SETUP + remote_cmd
+    wrapped = f"bash -i -c {shlex.quote(inner)}"
     cmd = [
         "sshpass", "-p", SSH_PASSWORD,
         "ssh", "-o", "StrictHostKeyChecking=no",
@@ -454,7 +458,8 @@ def _ssh_cmd(remote_cmd, timeout=8):
 
 def _ssh_popen(remote_cmd):
     """Start a persistent command on the Jetson via SSH. Returns Popen."""
-    wrapped = _JETSON_ROS_SETUP + remote_cmd
+    inner = _JETSON_ROS_SETUP + remote_cmd
+    wrapped = f"bash -i -c {shlex.quote(inner)}"
     cmd = [
         "sshpass", "-p", SSH_PASSWORD,
         "ssh", "-o", "StrictHostKeyChecking=no",
