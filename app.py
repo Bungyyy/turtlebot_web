@@ -508,8 +508,12 @@ def main():
     def timer_cb():
         vx, vy, vyaw = vel
 
+        # Skip publishing when velocity is zero — continuous Move(0,0,0)
+        # at 10Hz overrides StandUp/StandDown/Damp commands from the sport API.
+        is_moving = (vx != 0.0 or vy != 0.0 or vyaw != 0.0)
+
         # 1. Publish Sport API Move (api_id=1008) — primary path for Go2
-        if sport_pub:
+        if sport_pub and is_moving:
             try:
                 from unitree_api.msg import Request
                 req = Request()
@@ -523,12 +527,13 @@ def main():
                 if pub_count[0] < 3:
                     print(f"[relay] sport pub error: {e}", flush=True)
 
-        # 2. Publish cmd_vel (fallback)
-        m = Twist()
-        m.linear.x = vx
-        m.linear.y = vy
-        m.angular.z = vyaw
-        cmd_vel_pub.publish(m)
+        # 2. Publish cmd_vel (fallback) — only when moving
+        if is_moving:
+            m = Twist()
+            m.linear.x = vx
+            m.linear.y = vy
+            m.angular.z = vyaw
+            cmd_vel_pub.publish(m)
 
         pub_count[0] += 1
         if pub_count[0] <= 3 or pub_count[0] % 100 == 0:
