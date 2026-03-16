@@ -141,16 +141,22 @@ const Controls = (() => {
   function _publishCmdVel() {
     if (!enabled) return;
     const { vx, vy, vyaw } = currentVel;
+    const isMoving = vx !== 0 || vy !== 0 || vyaw !== 0;
 
-    // Always publish via rosbridge when connected (primary path)
-    if (useRosBridge && cmdVelTopic && RosBridge.isConnected()) {
+    // Publish via rosbridge when connected
+    if (cmdVelTopic && RosBridge.isConnected()) {
       cmdVelTopic.publish(new ROSLIB.Message({
         linear:  { x: vx, y: vy, z: 0 },
         angular: { x: 0, y: 0, z: vyaw },
       }));
     }
-    // Also send via HTTP relay when moving (belt-and-suspenders for reliability)
-    // Only send when velocity changes or is non-zero to avoid flooding
+
+    // ALSO publish via HTTP relay (belt-and-suspenders)
+    // The relay runs on the Jetson itself so DDS discovery is guaranteed.
+    // Only send while moving to avoid flooding the relay with zero commands.
+    if (isMoving) {
+      _httpRelaySend(vx, vy, vyaw);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -168,10 +174,10 @@ const Controls = (() => {
     if (!enabled) return;
     currentVel = { vx, vy, vyaw };
 
-    // If rosbridge is not connected, fall back to HTTP relay
-    if (!useRosBridge || !RosBridge.isConnected()) {
-      _httpRelaySend(vx, vy, vyaw);
-    }
+    // Always send via HTTP relay immediately for guaranteed delivery.
+    // The relay runs on the Jetson and has direct DDS access to the robot.
+    // Rosbridge cmd_vel is also sent in the 10Hz timer as a secondary path.
+    _httpRelaySend(vx, vy, vyaw);
 
     _updateVelDisplay();
   }
@@ -229,46 +235,22 @@ const Controls = (() => {
     document.getElementById("status-message").textContent = "Sport: " + label;
     console.log("[Controls] Sport command:", label, "api_id:", apiId);
 
-    // Try rosbridge first
-    if (sportMsgType && RosBridge.isConnected()) {
-      _sportCmdRosBridge(apiId, label);
-      return;
-    }
-
-    // Fallback to HTTP
+    // Sport API commands ALWAYS use HTTP/SSH — these are critical one-shot
+    // commands (StandUp, StandDown, Damp) that MUST be delivered reliably.
+    // Rosbridge publisher needs DDS subscriber discovery time which causes
+    // the first N messages to be lost, making it unreliable for one-shot use.
     _sportCmdHttp(apiId, label);
-  }
-
-  function _sportCmdRosBridge(apiId, label) {
-    if (!sportPubTopic) {
-      sportPubTopic = RosBridge.advertise("/api/sport/request", sportMsgType);
-    }
-    const msg = new ROSLIB.Message({
-      header: {
-        identity: { id: 0, api_id: apiId },
-        lease: { id: 0 },
-        policy: { priority: 0, noreply: false },
-      },
-      parameter: "{}",
-      binary: [],
-    });
-    // Publish multiple times to ensure delivery (like --rate 10 for 2s)
-    let count = 0;
-    const timer = setInterval(() => {
-      sportPubTopic.publish(msg);
-      count++;
-      if (count >= 20) clearInterval(timer);
-    }, 100);
-    console.log("[Controls] Sport via rosbridge:", label);
   }
 
   function _sportCmdHttp(apiId, label) {
     const body = { api_id: apiId, label: label };
     const host = _sshHost();
     if (host) body.ssh_host = host;
+    const pw = document.getElementById("ssh-password");
+    if (pw && pw.value) body.ssh_password = pw.value;
     _httpPost("/api/sport", body)
       .then((res) => {
-        if (res.ok) console.log("[Controls] Sport OK:", label);
+        if (res.ok) console.log("[Controls] Sport OK:", label, "type:", res.type);
         else console.error("[Controls] Sport FAIL:", label, res.error);
       });
   }
