@@ -94,20 +94,30 @@ const Controls = (() => {
 
   function _linSpeed() { return parseFloat(document.getElementById("linear-speed").value); }
   function _angSpeed() { return parseFloat(document.getElementById("angular-speed").value); }
+  function _sshHost() {
+    const el = document.getElementById("ssh-host");
+    return el ? el.value.trim() : "";
+  }
 
   function _setVel(vx, vy, vyaw) {
     if (!enabled) return;
     currentVel = { vx, vy, vyaw };
 
-    // Start persistent 10Hz publisher on backend via HTTP
-    _httpPost("/api/sport/move", currentVel);
+    // Start persistent 10Hz publisher on Jetson via HTTP → SSH
+    const body = { ...currentVel };
+    const host = _sshHost();
+    if (host) body.ssh_host = host;
+    _httpPost("/api/sport/move", body);
   }
 
   function _stop() {
     currentVel = { vx: 0, vy: 0, vyaw: 0 };
 
-    // Stop the persistent velocity publisher on backend
-    _httpPost("/api/sport/move", { vx: 0, vy: 0, vyaw: 0 });
+    // Stop the persistent velocity publisher on Jetson
+    const body = { vx: 0, vy: 0, vyaw: 0 };
+    const host = _sshHost();
+    if (host) body.ssh_host = host;
+    _httpPost("/api/sport/move", body);
 
     // Also stop via cmd_vel
     if (cmdVelTopic) {
@@ -162,7 +172,10 @@ const Controls = (() => {
   // ---- Sport Commands (one-shot via HTTP) --------------------------------
 
   function _sportCmd(apiId, label) {
-    _httpPost("/api/sport", { api_id: apiId, label: label })
+    const body = { api_id: apiId, label: label };
+    const host = _sshHost();
+    if (host) body.ssh_host = host;
+    _httpPost("/api/sport", body)
       .then((res) => {
         if (res.ok) {
           console.log("[Controls] Sport OK:", label, "type:", res.type);
