@@ -634,28 +634,61 @@ def sport_topic_type():
 
 @app.route("/api/sport/debug")
 def sport_debug():
-    """Debug: show message type definition and test publish on Jetson."""
+    """Comprehensive debug: check SSH, env, ROS nodes, topics, and test publish."""
+    info = {"ssh_host": _sport_ssh_host, "checks": {}}
+
+    # 1. SSH connectivity
+    rc, stdout, stderr = _ssh_cmd("echo OK", timeout=5)
+    info["checks"]["ssh_connection"] = {
+        "ok": rc == 0 and "OK" in stdout,
+        "rc": rc, "stdout": stdout, "stderr": stderr,
+    }
+
+    if rc != 0:
+        return jsonify(info)
+
+    # 2. Environment variables on the Jetson
+    rc, stdout, stderr = _ssh_cmd(
+        "echo RMW=$RMW_IMPLEMENTATION DOMAIN=$ROS_DOMAIN_ID "
+        "CYCLONE=$CYCLONEDDS_URI FASTRTPS=$FASTRTPS_DEFAULT_PROFILES_FILE"
+    )
+    info["checks"]["env"] = {"output": stdout, "stderr": stderr}
+
+    # 3. ROS2 daemon / node list
+    rc, stdout, stderr = _ssh_cmd("ros2 node list 2>&1", timeout=10)
+    info["checks"]["nodes"] = {
+        "rc": rc, "output": stdout.splitlines() if stdout else [],
+        "stderr": stderr,
+    }
+
+    # 4. ROS2 topic list
+    rc, stdout, stderr = _ssh_cmd("ros2 topic list 2>&1", timeout=10)
+    topics = stdout.splitlines() if stdout else []
+    info["checks"]["topics"] = {
+        "rc": rc, "topics": topics, "stderr": stderr,
+        "has_cmd_vel": "/cmd_vel" in topics,
+        "has_sport_request": "/api/sport/request" in topics,
+    }
+
+    # 5. /cmd_vel topic info (subscribers count)
+    if "/cmd_vel" in topics:
+        rc, stdout, stderr = _ssh_cmd("ros2 topic info /cmd_vel -v 2>&1", timeout=10)
+        info["checks"]["cmd_vel_info"] = {"rc": rc, "output": stdout, "stderr": stderr}
+
+    # 6. Test publish to /cmd_vel (zero velocity, safe)
+    rc, stdout, stderr = _ssh_cmd(
+        "timeout 3 ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "
+        "'{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}'",
+        timeout=8,
+    )
+    info["checks"]["cmd_vel_pub_test"] = {
+        "rc": rc, "stdout": stdout, "stderr": stderr,
+        "note": "rc=0 means --once found a subscriber and published OK",
+    }
+
+    # 7. Sport API topic type (for StandUp/StandDown)
     msg_type = _resolve_sport_type()
-    info = {"type": msg_type, "ssh_host": _sport_ssh_host}
-
-    if msg_type:
-        # Get the message definition
-        rc, stdout, stderr = _ssh_cmd(f"ros2 interface show {msg_type}")
-        info["definition"] = stdout
-        info["def_stderr"] = stderr
-
-        # Show what we're publishing
-        info["yaml_example"] = _sport_yaml(1004, {})
-
-        # Test publish
-        yaml_msg = _sport_yaml(1004, {})
-        remote = (f"timeout 5 ros2 topic pub --once "
-                  f"/api/sport/request {msg_type} {yaml_msg}")
-        rc, stdout, stderr = _ssh_cmd(remote, timeout=8)
-        info["pub_rc"] = rc
-        info["pub_stdout"] = stdout
-        info["pub_stderr"] = stderr
-        info["pub_cmd"] = remote
+    info["checks"]["sport_api_type"] = {"type": msg_type}
 
     return jsonify(info)
 
