@@ -379,6 +379,32 @@ select.input-sm { cursor: pointer; }
 .dpad-right  { grid-area: right; }
 .dpad-down   { grid-area: down; }
 
+/* ---------- Sport Mode Buttons ---------- */
+.sport-mode-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 0 4px;
+}
+
+.btn-sport {
+  flex: 1;
+  padding: 8px 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-sport:hover { background: #3a3f4b; color: var(--text-primary); border-color: var(--accent-blue); }
+.btn-sport:active { background: var(--accent-blue); color: #fff; }
+.btn-sport.btn-recovery { border-color: var(--accent-orange); color: var(--accent-orange); }
+.btn-sport.btn-recovery:hover { background: var(--accent-orange); color: #fff; }
+
 /* ---------- Nav2 Status Panel ---------- */
 .nav2-body {
   padding: 8px 14px 10px;
