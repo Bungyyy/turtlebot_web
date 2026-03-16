@@ -66,6 +66,10 @@ const Controls = (() => {
     } else {
       enabled = true;
     }
+
+    // Pre-start the teleop relay so first button press is instant
+    // (works even without rosbridge — uses HTTP/SSH to publish /cmd_vel)
+    _warmupRelay();
   }
 
   function start() {
@@ -83,9 +87,6 @@ const Controls = (() => {
         }
       }
     }, 100);
-
-    // Pre-start the teleop relay on the Jetson so first button press is instant
-    _warmupRelay();
   }
 
   function stop() {
