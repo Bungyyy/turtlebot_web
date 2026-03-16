@@ -137,8 +137,8 @@ def _launch_process(name, extra_args=None, ssh_host=None, ssh_password=None):
             "export CPATH=/usr/local/cuda/include:$CPATH; "
             "source /opt/ros/humble/setup.bash 2>/dev/null || true; "
             "source /usr/share/colcon_argcomplete/hook/colcon-argcomplete.bash 2>/dev/null || true; "
-            "source ~/3d_ws/install/setup.bash 2>/dev/null || "
-            "source ~/go2_ws/install/setup.bash 2>/dev/null || true; "
+            "source ~/3d_ws/install/setup.bash 2>/dev/null; "
+            "source ~/go2_ws/install/setup.bash 2>/dev/null; "
             f"export RMW_IMPLEMENTATION={RMW_IMPLEMENTATION}; "
             f"export CYCLONEDDS_URI='{CYCLONEDDS_URI}'; "
             + (f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID}; " if ROS_DOMAIN_ID else "")
