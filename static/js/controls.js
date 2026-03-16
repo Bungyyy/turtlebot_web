@@ -1,36 +1,48 @@
 /**
  * Unitree Go2 Teleop Controls
  * Handles D-pad, keyboard, and emergency stop.
- * Publishes geometry_msgs/Twist to /cmd_vel.
+ * Publishes velocity via Sport API Move (api_id 1008) for AI mode,
+ * and also via /cmd_vel as fallback for non-AI modes.
  */
 
-/* global RosBridge */
+/* global RosBridge, ROSLIB */
 /* exported Controls */
 
 const Controls = (() => {
   let cmdVelTopic = null;
   let publishInterval = null;
-  let currentTwist = { linear: 0, angular: 0 };
+  let currentTwist = { linear: 0, lateralY: 0, angular: 0 };
   let enabled = false;
-  let estopActive = false;        // true while e-stop burst is in progress
-  let estopBurstTimer = null;     // interval for repeated zero-vel
+  let estopActive = false;
+  let estopBurstTimer = null;
+
+  // Sport API constants
+  const SPORT_API = "/api/sport/request";
+  const SPORT_MSG_TYPE = "unitree_api/msg/Request";
+  const API_DAMP          = 1001;
+  const API_BALANCE_STAND = 1002;
+  const API_STOP_MOVE     = 1003;
+  const API_STAND_UP      = 1004;
+  const API_STAND_DOWN    = 1005;
+  const API_RECOVERY      = 1006;
+  const API_MOVE          = 1008;
 
   function init() {
     // D-pad button events (mouse + touch)
-    _bindBtn("btn-forward",  () => _setVel( _linSpeed(), 0));
-    _bindBtn("btn-backward", () => _setVel(-_linSpeed(), 0));
-    _bindBtn("btn-left",     () => _setVel(0,  _angSpeed()));
-    _bindBtn("btn-right",    () => _setVel(0, -_angSpeed()));
+    _bindBtn("btn-forward",  () => _setVel( _linSpeed(), 0, 0));
+    _bindBtn("btn-backward", () => _setVel(-_linSpeed(), 0, 0));
+    _bindBtn("btn-left",     () => _setVel(0, 0,  _angSpeed()));
+    _bindBtn("btn-right",    () => _setVel(0, 0, -_angSpeed()));
     _bindBtn("btn-stop",     () => _stop());
 
     // Emergency stop
     document.getElementById("btn-emergency-stop").addEventListener("click", _emergencyStop);
 
     // Unitree Go2 Sport Mode buttons
-    document.getElementById("btn-stand-up").addEventListener("click", () => _sportCmd(1004, "StandUp"));
-    document.getElementById("btn-stand-down").addEventListener("click", () => _sportCmd(1005, "StandDown"));
-    document.getElementById("btn-recovery-stand").addEventListener("click", () => _sportCmd(1006, "RecoveryStand"));
-    document.getElementById("btn-damp").addEventListener("click", () => _sportCmd(1001, "Damp"));
+    document.getElementById("btn-stand-up").addEventListener("click", () => _sportCmd(API_STAND_UP, "StandUp"));
+    document.getElementById("btn-stand-down").addEventListener("click", () => _sportCmd(API_STAND_DOWN, "StandDown"));
+    document.getElementById("btn-recovery-stand").addEventListener("click", () => _sportCmd(API_RECOVERY, "RecoveryStand"));
+    document.getElementById("btn-damp").addEventListener("click", () => _sportCmd(API_DAMP, "Damp"));
 
     // Speed slider labels
     document.getElementById("linear-speed").addEventListener("input", (e) => {
@@ -44,7 +56,7 @@ const Controls = (() => {
     document.addEventListener("keydown", _onKeyDown);
     document.addEventListener("keyup", _onKeyUp);
 
-    // Enable toggle (optional — may not exist in simplified UI)
+    // Enable toggle (optional)
     const toggleEl = document.getElementById("toggle-enable");
     if (toggleEl) {
       toggleEl.addEventListener("change", (e) => {
@@ -52,18 +64,17 @@ const Controls = (() => {
         if (!enabled) _stop();
       });
     } else {
-      enabled = true; // Always enabled when no toggle exists
+      enabled = true;
     }
   }
 
   function start() {
-    // Clean up previous publisher/interval (handles reconnect)
     if (publishInterval) { clearInterval(publishInterval); publishInterval = null; }
     cmdVelTopic = RosBridge.advertise("/cmd_vel", "geometry_msgs/msg/Twist");
     // Publish at ~10 Hz while moving
     publishInterval = setInterval(() => {
-      if (enabled && (currentTwist.linear !== 0 || currentTwist.angular !== 0)) {
-        _publishTwist(currentTwist.linear, currentTwist.angular);
+      if (enabled && (currentTwist.linear !== 0 || currentTwist.lateralY !== 0 || currentTwist.angular !== 0)) {
+        _publishVelocity(currentTwist.linear, currentTwist.lateralY, currentTwist.angular);
       }
     }, 100);
   }
@@ -78,27 +89,28 @@ const Controls = (() => {
   function _linSpeed() { return parseFloat(document.getElementById("linear-speed").value); }
   function _angSpeed() { return parseFloat(document.getElementById("angular-speed").value); }
 
-  function _setVel(lin, ang) {
+  function _setVel(lin, latY, ang) {
     if (!enabled) return;
-    currentTwist = { linear: lin, angular: ang };
-    _publishTwist(lin, ang);
+    currentTwist = { linear: lin, lateralY: latY, angular: ang };
+    _publishVelocity(lin, latY, ang);
   }
 
   function _stop() {
-    currentTwist = { linear: 0, angular: 0 };
-    _publishTwist(0, 0);
+    currentTwist = { linear: 0, lateralY: 0, angular: 0 };
+    _publishVelocity(0, 0, 0);
+    // Also send StopMove via sport API
+    _sportCmd(API_STOP_MOVE, "StopMove");
   }
 
   function _emergencyStop() {
     _stop();
     estopActive = true;
 
-    // Send a burst of zero-velocity commands (10 msgs over 1 second)
-    // to guarantee delivery even over lossy WiFi
+    // Burst zero-velocity commands (10 msgs over 1 second)
     let burstCount = 0;
     if (estopBurstTimer) clearInterval(estopBurstTimer);
     estopBurstTimer = setInterval(() => {
-      _publishTwist(0, 0);
+      _publishVelocity(0, 0, 0);
       burstCount++;
       if (burstCount >= 10) {
         clearInterval(estopBurstTimer);
@@ -107,20 +119,17 @@ const Controls = (() => {
       }
     }, 100);
 
-    // Cancel Nav2 navigation via action client
+    // Send Damp via sport API (immediate motor soft-stop)
+    _sportCmd(API_DAMP, "Damp");
+
+    // Cancel Nav2 navigation
     try {
       const actionClient = RosBridge.actionClient(
         "/navigate_to_pose",
         "nav2_msgs/action/NavigateToPose"
       );
       actionClient.cancel();
-    } catch (_) { /* Nav2 may not be running */ }
-
-    // Also publish to /goal_pose with zero to stop bt_navigator
-    RosBridge.publish("/cmd_vel", "geometry_msgs/msg/Twist", {
-      linear:  { x: 0, y: 0, z: 0 },
-      angular: { x: 0, y: 0, z: 0 },
-    });
+    } catch (_) {}
 
     // Visual feedback
     const btn = document.getElementById("btn-emergency-stop");
@@ -130,12 +139,43 @@ const Controls = (() => {
     document.getElementById("status-message").textContent = "EMERGENCY STOP activated";
   }
 
-  function _publishTwist(linear, angular) {
-    if (!cmdVelTopic) return;
-    cmdVelTopic.publish(new ROSLIB.Message({
-      linear:  { x: linear,  y: 0, z: 0 },
-      angular: { x: 0, y: 0, z: angular },
-    }));
+  /**
+   * Publish velocity via both Sport API Move (api_id 1008) and /cmd_vel.
+   * Sport API Move is required in AI mode; /cmd_vel is kept as fallback.
+   */
+  function _publishVelocity(vx, vy, vyaw) {
+    // 1. Sport API Move command (works in AI mode)
+    _sportMove(vx, vy, vyaw);
+
+    // 2. cmd_vel fallback (works in non-AI / nav2 mode)
+    if (cmdVelTopic) {
+      cmdVelTopic.publish(new ROSLIB.Message({
+        linear:  { x: vx, y: vy, z: 0 },
+        angular: { x: 0,  y: 0,  z: vyaw },
+      }));
+    }
+  }
+
+  // ---- Sport API --------------------------------------------------------
+
+  function _sportMove(vx, vy, vyaw) {
+    const msg = _buildSportMsg(API_MOVE, { x: vx, y: vy, rx: vyaw });
+    RosBridge.publish(SPORT_API, SPORT_MSG_TYPE, msg);
+  }
+
+  function _sportCmd(apiId, label) {
+    const msg = _buildSportMsg(apiId, {});
+    RosBridge.publish(SPORT_API, SPORT_MSG_TYPE, msg);
+    document.getElementById("status-message").textContent = "Sport: " + label;
+    console.log("[Controls] Sport command:", label, "api_id:", apiId);
+  }
+
+  function _buildSportMsg(apiId, params) {
+    return {
+      header: { identity: { id: Date.now() % 2147483647, api_id: apiId } },
+      parameter: JSON.stringify(params),
+      api_id: apiId,
+    };
   }
 
   // ---- Button helpers ---------------------------------------------------
@@ -157,14 +197,14 @@ const Controls = (() => {
 
   function _onKeyDown(e) {
     if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
-    if (keyState[e.key]) return; // prevent repeat
+    if (keyState[e.key]) return;
     keyState[e.key] = true;
 
     switch (e.key) {
-      case "ArrowUp":    case "w": _setVel( _linSpeed(), 0); break;
-      case "ArrowDown":  case "s": _setVel(-_linSpeed(), 0); break;
-      case "ArrowLeft":  case "a": _setVel(0,  _angSpeed()); break;
-      case "ArrowRight": case "d": _setVel(0, -_angSpeed()); break;
+      case "ArrowUp":    case "w": _setVel( _linSpeed(), 0, 0); break;
+      case "ArrowDown":  case "s": _setVel(-_linSpeed(), 0, 0); break;
+      case "ArrowLeft":  case "a": _setVel(0, 0,  _angSpeed()); break;
+      case "ArrowRight": case "d": _setVel(0, 0, -_angSpeed()); break;
       case " ": _emergencyStop(); break;
     }
   }
@@ -174,19 +214,6 @@ const Controls = (() => {
     if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","w","a","s","d"].includes(e.key)) {
       _stop();
     }
-  }
-
-  // ---- Unitree Go2 Sport Mode ------------------------------------------
-
-  function _sportCmd(apiId, label) {
-    const msg = {
-      header: { identity: { id: Date.now() % 2147483647, api_id: apiId } },
-      parameter: JSON.stringify({}),
-      api_id: apiId,
-    };
-    RosBridge.publish("/api/sport/request", "unitree_api/msg/Request", msg);
-    document.getElementById("status-message").textContent = "Sport: " + label;
-    console.log("[Controls] Sport command:", label, "api_id:", apiId);
   }
 
   return { init, start, stop };
