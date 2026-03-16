@@ -463,26 +463,39 @@
     checkTopicsBtn.addEventListener("click", async () => {
       const output = document.getElementById("ros2-topics-output");
       output.style.display = "block";
-      output.textContent = "Checking...";
+      output.textContent = "Checking via rosbridge...";
+
+      if (!RosBridge.isConnected()) {
+        output.textContent = "Not connected to rosbridge. Start ROS Bridge first.";
+        return;
+      }
+
       try {
-        const data = await (await fetch("/api/ros2/topics")).json();
-        if (data.ok) {
-          const topics = data.topics;
-          const scan = topics.includes("/scan") ? "YES" : "NO";
-          const odom = topics.includes("/odom") ? "YES" : "NO";
-          const map = topics.includes("/map") ? "YES" : "NO";
-          const cmdVel = topics.includes("/cmd_vel") ? "YES" : "NO";
-          output.textContent =
-            `Key topics:\n  /scan: ${scan}\n  /odom: ${odom}\n  /map: ${map}\n  /cmd_vel: ${cmdVel}\n\n` +
-            `All topics (${topics.length}):\n` + topics.join("\n");
-          if (scan === "NO" && odom === "NO") {
-            output.textContent += "\n\n⚠ Robot topics missing!\nMake sure ROS_DOMAIN_ID on robot matches this PC.";
-          }
-        } else {
-          output.textContent = "Error: " + (data.error || "unknown");
+        const result = await RosBridge.callService("/rosapi/topics", "rosapi/srv/Topics", {});
+        const topics = (result.topics || []).sort();
+        const scan = topics.includes("/scan") ? "YES" : "NO";
+        const odom = topics.includes("/odom") ? "YES" : "NO";
+        const map = topics.includes("/map") ? "YES" : "NO";
+        const cmdVel = topics.includes("/cmd_vel") ? "YES" : "NO";
+        output.textContent =
+          `Key topics:\n  /scan: ${scan}\n  /odom: ${odom}\n  /map: ${map}\n  /cmd_vel: ${cmdVel}\n\n` +
+          `All topics (${topics.length}):\n` + topics.join("\n");
+        if (scan === "NO" && odom === "NO") {
+          output.textContent += "\n\n⚠ Robot topics missing!\nCheck bringup is running.";
         }
       } catch (e) {
-        output.textContent = "Failed: " + e.message;
+        output.textContent = "Rosbridge query failed: " + e.message + "\nFalling back to local check...";
+        try {
+          const data = await (await fetch("/api/ros2/topics")).json();
+          if (data.ok) {
+            const topics = data.topics;
+            output.textContent = `All topics (${topics.length}):\n` + topics.join("\n");
+          } else {
+            output.textContent = "Error: " + (data.error || "unknown");
+          }
+        } catch (e2) {
+          output.textContent = "Failed: " + e2.message;
+        }
       }
     });
   }
