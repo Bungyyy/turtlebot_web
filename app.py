@@ -808,16 +808,14 @@ def _kill_relay():
     _teleop_relay_mode = None
 
 # ROS2 env setup to source on the Jetson via SSH.
-# bash -i sources .bashrc which sets ROS_DOMAIN_ID, CYCLONEDDS_URI, etc.
-# HOWEVER: sourcing setup.bash files can RESET these vars, so we save them
-# first and restore after sourcing.
+# Go2 uses ROS_DOMAIN_ID=30. We must set it AFTER sourcing setup.bash
+# because setup.bash can reset environment variables.
+GO2_DOMAIN_ID = os.environ.get("GO2_DOMAIN_ID", "30")
 _JETSON_ROS_SETUP = (
-    "_SAVED_DOMAIN=$ROS_DOMAIN_ID; _SAVED_CDDS=$CYCLONEDDS_URI; "
     "source /opt/ros/humble/setup.bash 2>/dev/null || true; "
     "source ~/go2_ws/install/setup.bash 2>/dev/null; "
     f"export RMW_IMPLEMENTATION={RMW_IMPLEMENTATION}; "
-    "export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-$_SAVED_DOMAIN}; "
-    "export CYCLONEDDS_URI=${CYCLONEDDS_URI:-$_SAVED_CDDS}; "
+    f"export ROS_DOMAIN_ID={GO2_DOMAIN_ID}; "
 )
 
 
@@ -1020,19 +1018,24 @@ def sport_move():
 
     is_moving = vx != 0 or vy != 0 or vyaw != 0
 
-    # --- Use legacy SSH ros2-topic-pub for movement (more reliable) ---
-    # The persistent relay has issues with DDS publishing; use the same
-    # mechanism as StandUp/StandDown which works reliably.
+    # --- Try persistent relay first (instant response) ---
+    with _teleop_relay_lock:
+        ok = _send_vel_relay(vx, vy, vyaw)
+
+    if ok:
+        action = "stop" if not is_moving else "move"
+        return jsonify({"ok": True, "action": action, "method": "relay",
+                        "vx": vx, "vy": vy, "vyaw": vyaw})
+
+    # --- Fallback: legacy per-SSH ros2 topic pub via Sport API ---
+    print("[Teleop] Relay unavailable, falling back to legacy SSH method")
     if not is_moving:
         _sport_move_stop()
-        # Also write zero to relay if running (keeps relay alive)
-        with _teleop_relay_lock:
-            _send_vel_relay(0, 0, 0)
-        return jsonify({"ok": True, "action": "stop", "method": "sport_api"})
+        _sport_pub_once(1003, {})
+        return jsonify({"ok": True, "action": "stop", "method": "legacy"})
     else:
-        print(f"[Move] Sport API Move: vx={vx} vy={vy} vyaw={vyaw}")
         _sport_move_start(vx, vy, vyaw)
-        return jsonify({"ok": True, "action": "move", "method": "sport_api",
+        return jsonify({"ok": True, "action": "move", "method": "legacy",
                         "vx": vx, "vy": vy, "vyaw": vyaw})
 
 
