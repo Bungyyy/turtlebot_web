@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""TurtleBot3 Web Control Interface - Flask Application Server.
+"""Unitree Go2 Web Control Interface - Flask Application Server.
 
 Serves the web UI and proxies the camera feed from ROS.
 The frontend connects directly to rosbridge_websocket for
 all ROS topic/service communication.
 
 Includes a Launch Manager for starting/stopping ROS2 processes
-(bringup, SLAM, navigation, rosbridge) from the web UI.
+(bringup, SLAM/FAST-LIO2, navigation, rosbridge) from the web UI.
 """
 
 import os
@@ -29,8 +29,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 ROSBRIDGE_HOST = os.environ.get("ROSBRIDGE_HOST", "localhost")
 ROSBRIDGE_PORT = int(os.environ.get("ROSBRIDGE_PORT", 9090))
 WEB_PORT = int(os.environ.get("WEB_PORT", 5000))
-TURTLEBOT3_MODEL = os.environ.get("TURTLEBOT3_MODEL", "burger")
-LDS_MODEL = os.environ.get("LDS_MODEL", "LDS-01")
+ROBOT_MODEL = os.environ.get("ROBOT_MODEL", "go2")
 MAP_SAVE_DIR = os.environ.get("MAP_SAVE_DIR", os.path.expanduser("~/maps"))
 
 # ---------------------------------------------------------------------------
@@ -44,10 +43,9 @@ ROS_DOMAIN_ID = os.environ.get("ROS_DOMAIN_ID", "30")
 
 
 def _build_env():
-    """Build environment with TURTLEBOT3_MODEL, LDS_MODEL, and ROS_DOMAIN_ID set."""
+    """Build environment with ROBOT_MODEL and ROS_DOMAIN_ID set."""
     env = os.environ.copy()
-    env["TURTLEBOT3_MODEL"] = TURTLEBOT3_MODEL
-    env["LDS_MODEL"] = LDS_MODEL
+    env["ROBOT_MODEL"] = ROBOT_MODEL
     env["ROS_DOMAIN_ID"] = ROS_DOMAIN_ID
     return env
 
@@ -59,14 +57,14 @@ LAUNCH_COMMANDS = {
         "rosbridge_websocket_launch.xml",
     ],
     "bringup": [
-        "ros2", "launch", "turtlebot3_bringup", "robot.launch.py",
+        "ros2", "launch", "go2_bringup", "robot.launch.py",
     ],
     "slam": [
-        "ros2", "launch", "turtlebot3_cartographer", "cartographer.launch.py",
-        "use_rviz:=false",
+        "ros2", "launch", "fast_lio", "mapping.launch.py",
+        "rviz:=false",
     ],
     "navigation": [
-        "ros2", "launch", "turtlebot3_navigation2", "navigation2.launch.py",
+        "ros2", "launch", "go2_navigation", "navigation2.launch.py",
         "use_rviz:=false",
         # map:= argument is appended dynamically
     ],
@@ -76,7 +74,7 @@ LAUNCH_COMMANDS = {
 # Map process names to executables that should be killed before re-launch
 _KILL_PATTERNS = {
     "rosbridge": ["rosbridge_websocket", "rosapi"],
-    "slam": ["cartographer_node", "cartographer_occupancy_grid_node"],
+    "slam": ["fastlio_mapping", "fast_lio", "pointcloud_to_laserscan"],
     "navigation": ["bt_navigator", "controller_server", "planner_server",
                     "behavior_server", "lifecycle_manager_navigation"],
 }
@@ -124,10 +122,9 @@ def _launch_process(name, extra_args=None, ssh_host=None):
         wrapped = (
             "source /opt/ros/humble/setup.bash 2>/dev/null || "
             "source /opt/ros/foxy/setup.bash 2>/dev/null || true; "
-            "source ~/turtlebot3_ws/install/setup.bash 2>/dev/null || "
-            "source ~/catkin_ws/install/setup.bash 2>/dev/null || true; "
-            f"export TURTLEBOT3_MODEL={TURTLEBOT3_MODEL}; "
-            f"export LDS_MODEL={LDS_MODEL}; "
+            "source ~/go2_ws/install/setup.bash 2>/dev/null || "
+            "source ~/unitree_ws/install/setup.bash 2>/dev/null || true; "
+            f"export ROBOT_MODEL={ROBOT_MODEL}; "
             f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID}; "
             f"{remote_cmd}"
         )
@@ -224,8 +221,7 @@ def index():
         "index.html",
         rosbridge_host=ROSBRIDGE_HOST,
         rosbridge_port=ROSBRIDGE_PORT,
-        turtlebot3_model=TURTLEBOT3_MODEL,
-        lds_model=LDS_MODEL,
+        robot_model=ROBOT_MODEL,
         ros_domain_id=ROS_DOMAIN_ID,
     )
 
@@ -236,7 +232,7 @@ def config():
     return jsonify({
         "rosbridge_host": ROSBRIDGE_HOST,
         "rosbridge_port": ROSBRIDGE_PORT,
-        "turtlebot3_model": TURTLEBOT3_MODEL,
+        "robot_model": ROBOT_MODEL,
         "map_save_dir": MAP_SAVE_DIR,
         "ros_domain_id": ROS_DOMAIN_ID,
     })
@@ -415,6 +411,6 @@ def handle_disconnect():
 if __name__ == "__main__":
     print(f"[WebUI] Starting on http://0.0.0.0:{WEB_PORT}")
     print(f"[WebUI] Expecting rosbridge at ws://{ROSBRIDGE_HOST}:{ROSBRIDGE_PORT}")
-    print(f"[WebUI] TurtleBot3 model: {TURTLEBOT3_MODEL}")
+    print(f"[WebUI] Robot model: {ROBOT_MODEL}")
     print(f"[WebUI] Map save dir: {MAP_SAVE_DIR}")
     socketio.run(app, host="0.0.0.0", port=WEB_PORT, debug=True)

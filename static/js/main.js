@@ -244,8 +244,8 @@
     })).json();
 
     if (res.ok) {
-      _updateStepBadge("step2-badge", "SLAM", "badge-slam");
-      _setStatus("SLAM started — drive the robot to map the area");
+      _updateStepBadge("step2-badge", "FAST-LIO2", "badge-slam");
+      _setStatus("FAST-LIO2 3D mapping started — drive the robot to map the area");
     } else {
       _setStatus("SLAM: " + (res.message || res.error));
     }
@@ -338,7 +338,7 @@
 
     // SLAM / Nav badges
     if (LaunchManager.isRunning("slam")) {
-      _updateStepBadge("step2-badge", "SLAM", "badge-slam");
+      _updateStepBadge("step2-badge", "FAST-LIO2", "badge-slam");
     } else if (LaunchManager.isRunning("navigation")) {
       _updateStepBadge("step2-badge", "Nav", "badge-nav");
     }
@@ -361,12 +361,12 @@
         console.log("[Main] ROS nodes:", nodes);
 
         const hasTurtlebot = nodes.some((n) =>
-          n.includes("turtlebot") || n.includes("diff_drive") ||
+          n.includes("go2") || n.includes("unitree") ||
           n.includes("robot_state_publisher")
         );
         const hasSlam = nodes.some((n) =>
-          n.includes("slam") || n.includes("cartographer") ||
-          n.includes("gmapping")
+          n.includes("slam") || n.includes("fast_lio") ||
+          n.includes("fastlio") || n.includes("lio_sam")
         );
         const hasAmcl = nodes.some((n) => n.includes("amcl"));
         const hasNav = nodes.some((n) =>

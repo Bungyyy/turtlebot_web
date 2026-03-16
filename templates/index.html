@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TurtleBot3 Web Control</title>
+  <title>Unitree Go2 Web Control</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
   <!-- roslibjs – direct WebSocket connection to rosbridge -->
   <script src="https://cdn.jsdelivr.net/npm/eventemitter2@6.4.9/lib/eventemitter2.min.js"></script>
@@ -14,7 +14,7 @@
   <nav id="top-nav">
     <div class="nav-brand">
       <span class="brand-icon">&#9881;</span>
-      <span class="brand-text">TurtleBot3</span>
+      <span class="brand-text">Unitree Go2</span>
     </div>
     <ul class="nav-tabs">
       <li class="active" data-tab="mobile">Mobile</li>
@@ -45,7 +45,7 @@
             <div class="wf-body">
               <div class="wf-row">
                 <label>SSH Host</label>
-                <input type="text" id="ssh-host" class="input-sm" placeholder="ubuntu@192.168.1.10" />
+                <input type="text" id="ssh-host" class="input-sm" placeholder="unitree@192.168.123.18" />
               </div>
               <div class="wf-row">
                 <button id="btn-bringup" class="btn-action btn-primary wf-full">Start Bringup</button>
@@ -68,7 +68,7 @@
             </div>
             <div class="wf-body">
               <div class="mode-buttons">
-                <button id="btn-slam-mode" class="btn-mode">SLAM</button>
+                <button id="btn-slam-mode" class="btn-mode">3D Mapping (FAST-LIO2)</button>
                 <button id="btn-nav-mode" class="btn-mode">Navigation</button>
               </div>
               <!-- SLAM sub-controls -->
@@ -141,13 +141,13 @@
             <div class="card-header"><h3>Teleop</h3></div>
             <div class="speed-control">
               <label>Linear Speed</label>
-              <input type="range" id="linear-speed" min="0.01" max="0.5" step="0.01" value="0.15" />
-              <span id="linear-speed-val">0.15</span> m/s
+              <input type="range" id="linear-speed" min="0.01" max="1.5" step="0.01" value="0.3" />
+              <span id="linear-speed-val">0.30</span> m/s
             </div>
             <div class="speed-control">
               <label>Angular Speed</label>
-              <input type="range" id="angular-speed" min="0.1" max="2.0" step="0.1" value="0.5" />
-              <span id="angular-speed-val">0.50</span> rad/s
+              <input type="range" id="angular-speed" min="0.1" max="3.0" step="0.1" value="0.8" />
+              <span id="angular-speed-val">0.80</span> rad/s
             </div>
             <div class="dpad">
               <button class="dpad-btn dpad-up" id="btn-forward" title="Forward">&#9650;</button>
@@ -179,7 +179,7 @@
                 <div class="legend-title">Layers</div>
                 <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="map" checked /><span class="dot" style="background:#d2d2d2"></span> Map</label>
                 <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="robot" checked /><span class="dot dot-green"></span> Robot</label>
-                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="laser" checked /><span class="dot" style="background:#00ffff"></span> LaserScan</label>
+                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="laser" checked /><span class="dot" style="background:#00ffff"></span> LiDAR Scan</label>
                 <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="odom" checked /><span class="dot dot-orange"></span> Odom Trail</label>
                 <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="path" checked /><span class="dot" style="background:#00c850"></span> Nav Path</label>
                 <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="costmap" checked /><span class="dot dot-purple"></span> Costmap</label>
@@ -195,8 +195,8 @@
             <!-- ROS Node Status (like KraiPlatform reference) -->
             <div id="ros-nodes-bar">
               <span class="ros-node-item" id="rn-rosbridge"><span class="rn-dot"></span>/rosbridge</span>
-              <span class="ros-node-item" id="rn-turtlebot"><span class="rn-dot"></span>/turtlebot3</span>
-              <span class="ros-node-item" id="rn-slam"><span class="rn-dot"></span>/slam</span>
+              <span class="ros-node-item" id="rn-turtlebot"><span class="rn-dot"></span>/go2</span>
+              <span class="ros-node-item" id="rn-slam"><span class="rn-dot"></span>/fast_lio</span>
               <span class="ros-node-item" id="rn-amcl"><span class="rn-dot"></span>/amcl</span>
               <span class="ros-node-item" id="rn-navigation"><span class="rn-dot"></span>/navigation</span>
               <span class="ros-node-item" id="rn-map-server"><span class="rn-dot"></span>/map_server</span>
@@ -253,8 +253,8 @@
               <select id="camera-topic">
                 <option value="/camera/image_raw">/camera/image_raw</option>
                 <option value="/camera/image_raw/compressed">/camera/image_raw/compressed</option>
+                <option value="/go2_camera/color/image">/go2_camera/color/image</option>
                 <option value="/image_raw">/image_raw</option>
-                <option value="/image_raw/compressed">/image_raw/compressed</option>
               </select>
               <button id="btn-camera-toggle" class="btn-action btn-primary">Start Stream</button>
             </div>
@@ -340,20 +340,16 @@
         <div class="card">
           <div class="card-header"><h3>Robot Parameters</h3></div>
           <div class="form-group">
-            <label>TurtleBot3 Model</label>
-            <input type="text" id="setting-model" value="{{ turtlebot3_model }}" disabled />
-          </div>
-          <div class="form-group">
-            <label>LDS Model (LDS-01 or LDS-02)</label>
-            <input type="text" id="setting-lds-model" value="{{ lds_model }}" disabled />
+            <label>Robot Model</label>
+            <input type="text" id="setting-model" value="{{ robot_model }}" disabled />
           </div>
           <div class="form-group">
             <label>Max Linear Velocity (m/s)</label>
-            <input type="number" id="setting-max-linear" value="0.22" step="0.01" />
+            <input type="number" id="setting-max-linear" value="1.5" step="0.01" />
           </div>
           <div class="form-group">
             <label>Max Angular Velocity (rad/s)</label>
-            <input type="number" id="setting-max-angular" value="2.84" step="0.01" />
+            <input type="number" id="setting-max-angular" value="3.0" step="0.01" />
           </div>
         </div>
       </div>
@@ -364,8 +360,8 @@
   <footer id="status-bar">
     <div class="status-nodes">
       <span class="node-status" id="node-rosbridge"><span class="indicator"></span> rosbridge</span>
-      <span class="node-status" id="node-turtlebot"><span class="indicator"></span> turtlebot3</span>
-      <span class="node-status" id="node-slam"><span class="indicator"></span> SLAM</span>
+      <span class="node-status" id="node-turtlebot"><span class="indicator"></span> go2</span>
+      <span class="node-status" id="node-slam"><span class="indicator"></span> FAST-LIO2</span>
       <span class="node-status" id="node-navigation"><span class="indicator"></span> Navigation</span>
       <span class="node-status" id="node-camera"><span class="indicator"></span> Camera</span>
     </div>

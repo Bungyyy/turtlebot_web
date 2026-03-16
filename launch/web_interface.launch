@@ -1,5 +1,5 @@
 <!--
-  ROS1 Launch file for TurtleBot3 Web Interface.
+  ROS1 Launch file for Unitree Go2 Web Interface.
 
   Launches rosbridge_websocket so the browser can talk to ROS.
 

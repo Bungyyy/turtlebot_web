@@ -1,7 +1,8 @@
 /**
- * Map Viewer – map-centric rendering.
+ * Map Viewer – map-centric rendering for Unitree Go2.
  * The occupancy grid auto-fits to fill the canvas.
- * Robot, laser, path overlays are positioned using the map's coordinate system.
+ * Robot, laser/LiDAR, path overlays are positioned using the map's coordinate system.
+ * Supports FAST-LIO2 3D mapping with pointcloud_to_laserscan conversion.
  */
 
 /* global RosBridge, ROSLIB */
