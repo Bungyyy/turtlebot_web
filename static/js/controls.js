@@ -83,6 +83,9 @@ const Controls = (() => {
         }
       }
     }, 100);
+
+    // Pre-start the teleop relay on the Jetson so first button press is instant
+    _warmupRelay();
   }
 
   function stop() {
@@ -91,6 +94,23 @@ const Controls = (() => {
   }
 
   // ---- Internal ---------------------------------------------------------
+
+  function _warmupRelay() {
+    const body = {};
+    const host = _sshHost();
+    if (host) body.ssh_host = host;
+    fetch("/api/teleop/warmup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.ok) console.log("[Controls] Teleop relay warmed up");
+        else console.warn("[Controls] Teleop relay warmup failed");
+      })
+      .catch((err) => console.warn("[Controls] Warmup error:", err));
+  }
 
   function _linSpeed() { return parseFloat(document.getElementById("linear-speed").value); }
   function _angSpeed() { return parseFloat(document.getElementById("angular-speed").value); }

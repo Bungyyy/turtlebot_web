@@ -10,10 +10,13 @@ Includes a Launch Manager for starting/stopping ROS2 processes
 """
 
 import os
+import json
+import base64
 import shlex
 import signal
 import subprocess
 import threading
+import time
 import glob as globmod
 from pathlib import Path
 from flask import Flask, render_template, Response, jsonify, request
@@ -418,8 +421,188 @@ def camera_feed():
 # SSH target for the Go2 Jetson — set from the web UI or default
 _sport_ssh_host = os.environ.get("GO2_SSH_HOST", "unitree@192.168.123.18")
 _sport_msg_type = None          # cached message type
-_sport_move_proc = None         # persistent ssh+ros2 topic pub for velocity
+_sport_move_proc = None         # persistent ssh+ros2 topic pub for velocity (legacy)
 _sport_move_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# Persistent Teleop Relay — avoids SSH+DDS startup delay on every button press
+# ---------------------------------------------------------------------------
+# A small Python script is deployed to the Jetson and kept running.  It creates
+# a ROS2 node once (paying the DDS discovery cost once) and then reads velocity
+# commands as JSON lines from stdin, publishing /cmd_vel at 10Hz.
+#
+# Flow:  Browser → HTTP POST /api/sport/move → Flask → stdin write → SSH →
+#        relay script on Jetson → /cmd_vel at 10Hz
+
+_teleop_relay_proc = None       # persistent SSH subprocess (stdin=PIPE)
+_teleop_relay_host = None       # host the relay is connected to
+_teleop_relay_lock = threading.Lock()
+_teleop_relay_deployed = False
+
+_TELEOP_RELAY_SCRIPT = r'''#!/usr/bin/env python3
+"""Teleop relay: reads JSON velocity from stdin, publishes /cmd_vel at 10Hz."""
+import sys, json, threading
+import rclpy
+from geometry_msgs.msg import Twist
+
+def main():
+    rclpy.init()
+    node = rclpy.create_node('web_teleop_relay')
+    pub = node.create_publisher(Twist, '/cmd_vel', 10)
+    vel = [0.0, 0.0, 0.0]  # vx, vy, vyaw
+
+    def timer_cb():
+        m = Twist()
+        m.linear.x = vel[0]
+        m.linear.y = vel[1]
+        m.angular.z = vel[2]
+        pub.publish(m)
+
+    node.create_timer(0.1, timer_cb)
+    threading.Thread(target=rclpy.spin, args=(node,), daemon=True).start()
+
+    sys.stdout.write('READY\n')
+    sys.stdout.flush()
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+            vel[0] = float(d.get('vx', 0))
+            vel[1] = float(d.get('vy', 0))
+            vel[2] = float(d.get('vyaw', 0))
+        except Exception:
+            pass
+
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+'''
+
+
+def _deploy_relay():
+    """Deploy the teleop relay script to the Jetson (idempotent)."""
+    global _teleop_relay_deployed
+    if _teleop_relay_deployed:
+        return True
+    script_b64 = base64.b64encode(_TELEOP_RELAY_SCRIPT.encode()).decode()
+    rc, _, stderr = _ssh_cmd(
+        f"echo '{script_b64}' | base64 -d > /tmp/_web_teleop_relay.py && "
+        f"chmod +x /tmp/_web_teleop_relay.py",
+        timeout=8,
+    )
+    if rc == 0:
+        _teleop_relay_deployed = True
+        print("[Teleop] Relay script deployed to Jetson")
+        return True
+    print(f"[Teleop] Failed to deploy relay: {stderr}")
+    return False
+
+
+def _start_relay():
+    """Start the persistent teleop relay on the Jetson via SSH."""
+    global _teleop_relay_proc, _teleop_relay_host
+
+    # Already running?
+    if (_teleop_relay_proc and _teleop_relay_proc.poll() is None
+            and _teleop_relay_host == _sport_ssh_host):
+        return True
+
+    _kill_relay()
+
+    if not _deploy_relay():
+        return False
+
+    remote = "python3 -u /tmp/_web_teleop_relay.py"
+    # Source .bashrc for CYCLONEDDS_URI and other env, then ROS2 setup
+    inner = (
+        "source ~/.bashrc 2>/dev/null; "
+        + _JETSON_ROS_SETUP
+        + remote
+    )
+    wrapped = f"bash -c {shlex.quote(inner)}"
+    cmd = [
+        "sshpass", "-p", SSH_PASSWORD,
+        "ssh", "-o", "StrictHostKeyChecking=no",
+        "-o", "ConnectTimeout=5",
+        "-o", "ServerAliveInterval=10",
+        _sport_ssh_host, wrapped,
+    ]
+
+    try:
+        _teleop_relay_proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            preexec_fn=os.setsid,
+        )
+    except Exception as e:
+        print(f"[Teleop] Failed to start relay SSH: {e}")
+        _teleop_relay_proc = None
+        return False
+
+    _teleop_relay_host = _sport_ssh_host
+
+    # Wait for READY signal (up to 15 seconds — includes DDS discovery)
+    import select
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        if _teleop_relay_proc.poll() is not None:
+            print("[Teleop] Relay process exited early")
+            _teleop_relay_proc = None
+            return False
+        try:
+            rlist, _, _ = select.select([_teleop_relay_proc.stdout], [], [], 0.2)
+            if rlist:
+                line = _teleop_relay_proc.stdout.readline().decode().strip()
+                if "READY" in line:
+                    print("[Teleop] Relay started and ready")
+                    return True
+        except Exception:
+            break
+
+    print("[Teleop] Relay did not send READY in time")
+    _kill_relay()
+    return False
+
+
+def _send_vel_relay(vx, vy, vyaw):
+    """Send a velocity command to the running relay (instant)."""
+    global _teleop_relay_proc
+    if not _teleop_relay_proc or _teleop_relay_proc.poll() is not None:
+        if not _start_relay():
+            return False
+
+    try:
+        cmd_line = json.dumps({"vx": vx, "vy": vy, "vyaw": vyaw}) + "\n"
+        _teleop_relay_proc.stdin.write(cmd_line.encode())
+        _teleop_relay_proc.stdin.flush()
+        return True
+    except (BrokenPipeError, OSError) as e:
+        print(f"[Teleop] Relay write failed: {e}")
+        _kill_relay()
+        return False
+
+
+def _kill_relay():
+    """Kill the teleop relay process."""
+    global _teleop_relay_proc, _teleop_relay_host
+    if _teleop_relay_proc:
+        try:
+            os.killpg(os.getpgid(_teleop_relay_proc.pid), signal.SIGTERM)
+            _teleop_relay_proc.wait(timeout=3)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(_teleop_relay_proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+        _teleop_relay_proc = None
+    _teleop_relay_host = None
 
 # ROS2 env setup to source on the Jetson via SSH.
 # Do NOT export CYCLONEDDS_URI here – the Jetson's own DDS config (set by the
@@ -589,6 +772,9 @@ def sport_command():
         _sport_ssh_host = data["ssh_host"]
 
     _sport_move_stop()
+    # Stop relay velocity too (e.g., Damp should stop all motion)
+    with _teleop_relay_lock:
+        _send_vel_relay(0, 0, 0)
 
     ok, detail = _sport_pub_once(api_id, parameter)
     label = data.get("label", str(api_id))
@@ -600,7 +786,12 @@ def sport_command():
 
 @app.route("/api/sport/move", methods=["POST"])
 def sport_move():
-    """Start/stop persistent velocity publishing for teleop."""
+    """Start/stop persistent velocity publishing for teleop.
+
+    Uses a persistent relay script on the Jetson that keeps a ROS2 node alive
+    so velocity updates are instant (no SSH/DDS startup per button press).
+    Falls back to legacy ros2-topic-pub-per-SSH if the relay fails.
+    """
     data = request.get_json(force=True)
     vx = float(data.get("vx", 0))
     vy = float(data.get("vy", 0))
@@ -611,18 +802,46 @@ def sport_move():
     if data.get("ssh_host"):
         _sport_ssh_host = data["ssh_host"]
 
+    # --- Try persistent relay first (instant response) ---
+    with _teleop_relay_lock:
+        ok = _send_vel_relay(vx, vy, vyaw)
+
+    if ok:
+        action = "stop" if (vx == 0 and vy == 0 and vyaw == 0) else "move"
+        return jsonify({"ok": True, "action": action, "method": "relay",
+                        "vx": vx, "vy": vy, "vyaw": vyaw})
+
+    # --- Fallback: legacy per-SSH ros2 topic pub ---
+    print("[Teleop] Relay unavailable, falling back to legacy SSH method")
     if vx == 0 and vy == 0 and vyaw == 0:
         _sport_move_stop()
-        # Publish a single zero-velocity Twist to ensure the robot stops
         _ssh_cmd(
             "ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "
             "'{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}'",
             timeout=5,
         )
-        return jsonify({"ok": True, "action": "stop"})
+        return jsonify({"ok": True, "action": "stop", "method": "legacy"})
     else:
         _sport_move_start(vx, vy, vyaw)
-        return jsonify({"ok": True, "action": "move", "vx": vx, "vy": vy, "vyaw": vyaw})
+        return jsonify({"ok": True, "action": "move", "method": "legacy",
+                        "vx": vx, "vy": vy, "vyaw": vyaw})
+
+
+@app.route("/api/teleop/warmup", methods=["POST"])
+def teleop_warmup():
+    """Pre-start the teleop relay so the first button press is instant."""
+    global _sport_ssh_host
+    data = request.get_json(force=True) if request.data else {}
+    if data.get("ssh_host"):
+        _sport_ssh_host = data["ssh_host"]
+
+    with _teleop_relay_lock:
+        ok = False
+        if not (_teleop_relay_proc and _teleop_relay_proc.poll() is None):
+            ok = _start_relay()
+        else:
+            ok = True
+    return jsonify({"ok": ok})
 
 
 @app.route("/api/sport/topic_type")
@@ -635,7 +854,12 @@ def sport_topic_type():
 @app.route("/api/sport/debug")
 def sport_debug():
     """Comprehensive debug: check SSH, env, ROS nodes, topics, and test publish."""
-    info = {"ssh_host": _sport_ssh_host, "checks": {}}
+    relay_alive = _teleop_relay_proc and _teleop_relay_proc.poll() is None
+    info = {
+        "ssh_host": _sport_ssh_host,
+        "relay": {"running": relay_alive, "host": _teleop_relay_host},
+        "checks": {},
+    }
 
     # 1. SSH connectivity
     rc, stdout, stderr = _ssh_cmd("echo OK", timeout=5)
@@ -730,6 +954,9 @@ def handle_disconnect():
 # ---------------------------------------------------------------------------
 # Entry-point
 # ---------------------------------------------------------------------------
+
+import atexit
+atexit.register(_kill_relay)
 
 if __name__ == "__main__":
     print(f"[WebUI] Starting on http://0.0.0.0:{WEB_PORT}")
