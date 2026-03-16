@@ -1,33 +1,37 @@
 /**
  * Unitree Go2 Teleop Controls
  * Handles D-pad, keyboard, and emergency stop.
- * Publishes velocity via Sport API Move (api_id 1008) for AI mode,
- * and also via /cmd_vel as fallback for non-AI modes.
+ *
+ * Movement: sends velocity via SocketIO → backend → ros2 topic pub at 10Hz
+ *           (Sport API Move, api_id 1008 — required for Go2 AI mode)
+ * Also publishes /cmd_vel via rosbridge as fallback for nav2 mode.
+ *
+ * Sport commands (stand, lie down, etc.): via SocketIO → backend → ros2 topic pub --once
  */
 
-/* global RosBridge, ROSLIB */
+/* global RosBridge, ROSLIB, io */
 /* exported Controls */
 
 const Controls = (() => {
   let cmdVelTopic = null;
   let publishInterval = null;
-  let currentTwist = { linear: 0, lateralY: 0, angular: 0 };
+  let currentVel = { vx: 0, vy: 0, vyaw: 0 };
   let enabled = false;
   let estopActive = false;
   let estopBurstTimer = null;
+  let socket = null;
 
-  // Sport API constants
-  const SPORT_API = "/api/sport/request";
-  const SPORT_MSG_TYPE = "unitree_api/msg/Request";
-  const API_DAMP          = 1001;
-  const API_BALANCE_STAND = 1002;
-  const API_STOP_MOVE     = 1003;
-  const API_STAND_UP      = 1004;
-  const API_STAND_DOWN    = 1005;
-  const API_RECOVERY      = 1006;
-  const API_MOVE          = 1008;
+  // Sport API IDs
+  const API_DAMP      = 1001;
+  const API_STOP_MOVE = 1003;
+  const API_STAND_UP  = 1004;
+  const API_STAND_DOWN = 1005;
+  const API_RECOVERY  = 1006;
 
   function init() {
+    // Connect SocketIO for sport commands
+    socket = io();
+
     // D-pad button events (mouse + touch)
     _bindBtn("btn-forward",  () => _setVel( _linSpeed(), 0, 0));
     _bindBtn("btn-backward", () => _setVel(-_linSpeed(), 0, 0));
@@ -71,10 +75,16 @@ const Controls = (() => {
   function start() {
     if (publishInterval) { clearInterval(publishInterval); publishInterval = null; }
     cmdVelTopic = RosBridge.advertise("/cmd_vel", "geometry_msgs/msg/Twist");
-    // Publish at ~10 Hz while moving
+
+    // Publish cmd_vel at ~10Hz while moving (fallback for nav2 mode)
     publishInterval = setInterval(() => {
-      if (enabled && (currentTwist.linear !== 0 || currentTwist.lateralY !== 0 || currentTwist.angular !== 0)) {
-        _publishVelocity(currentTwist.linear, currentTwist.lateralY, currentTwist.angular);
+      if (enabled && (currentVel.vx !== 0 || currentVel.vy !== 0 || currentVel.vyaw !== 0)) {
+        if (cmdVelTopic) {
+          cmdVelTopic.publish(new ROSLIB.Message({
+            linear:  { x: currentVel.vx, y: currentVel.vy, z: 0 },
+            angular: { x: 0, y: 0, z: currentVel.vyaw },
+          }));
+        }
       }
     }, 100);
   }
@@ -89,28 +99,46 @@ const Controls = (() => {
   function _linSpeed() { return parseFloat(document.getElementById("linear-speed").value); }
   function _angSpeed() { return parseFloat(document.getElementById("angular-speed").value); }
 
-  function _setVel(lin, latY, ang) {
+  function _setVel(vx, vy, vyaw) {
     if (!enabled) return;
-    currentTwist = { linear: lin, lateralY: latY, angular: ang };
-    _publishVelocity(lin, latY, ang);
+    currentVel = { vx, vy, vyaw };
+
+    // Send to backend via SocketIO → ros2 topic pub at 10Hz (Sport API)
+    if (socket) socket.emit("sport_move", currentVel);
   }
 
   function _stop() {
-    currentTwist = { linear: 0, lateralY: 0, angular: 0 };
-    _publishVelocity(0, 0, 0);
-    // Also send StopMove via sport API
-    _sportCmd(API_STOP_MOVE, "StopMove");
+    currentVel = { vx: 0, vy: 0, vyaw: 0 };
+
+    // Stop the persistent velocity publisher on backend
+    if (socket) socket.emit("sport_move", { vx: 0, vy: 0, vyaw: 0 });
+
+    // Also stop via cmd_vel
+    if (cmdVelTopic) {
+      cmdVelTopic.publish(new ROSLIB.Message({
+        linear:  { x: 0, y: 0, z: 0 },
+        angular: { x: 0, y: 0, z: 0 },
+      }));
+    }
   }
 
   function _emergencyStop() {
     _stop();
     estopActive = true;
 
-    // Burst zero-velocity commands (10 msgs over 1 second)
+    // Send Damp via sport API (immediate motor soft-stop)
+    _sportCmd(API_DAMP, "EMERGENCY STOP");
+
+    // Burst zero cmd_vel (10 msgs over 1 second)
     let burstCount = 0;
     if (estopBurstTimer) clearInterval(estopBurstTimer);
     estopBurstTimer = setInterval(() => {
-      _publishVelocity(0, 0, 0);
+      if (cmdVelTopic) {
+        cmdVelTopic.publish(new ROSLIB.Message({
+          linear:  { x: 0, y: 0, z: 0 },
+          angular: { x: 0, y: 0, z: 0 },
+        }));
+      }
       burstCount++;
       if (burstCount >= 10) {
         clearInterval(estopBurstTimer);
@@ -119,14 +147,10 @@ const Controls = (() => {
       }
     }, 100);
 
-    // Send Damp via sport API (immediate motor soft-stop)
-    _sportCmd(API_DAMP, "Damp");
-
     // Cancel Nav2 navigation
     try {
       const actionClient = RosBridge.actionClient(
-        "/navigate_to_pose",
-        "nav2_msgs/action/NavigateToPose"
+        "/navigate_to_pose", "nav2_msgs/action/NavigateToPose"
       );
       actionClient.cancel();
     } catch (_) {}
@@ -139,43 +163,14 @@ const Controls = (() => {
     document.getElementById("status-message").textContent = "EMERGENCY STOP activated";
   }
 
-  /**
-   * Publish velocity via both Sport API Move (api_id 1008) and /cmd_vel.
-   * Sport API Move is required in AI mode; /cmd_vel is kept as fallback.
-   */
-  function _publishVelocity(vx, vy, vyaw) {
-    // 1. Sport API Move command (works in AI mode)
-    _sportMove(vx, vy, vyaw);
-
-    // 2. cmd_vel fallback (works in non-AI / nav2 mode)
-    if (cmdVelTopic) {
-      cmdVelTopic.publish(new ROSLIB.Message({
-        linear:  { x: vx, y: vy, z: 0 },
-        angular: { x: 0,  y: 0,  z: vyaw },
-      }));
-    }
-  }
-
-  // ---- Sport API --------------------------------------------------------
-
-  function _sportMove(vx, vy, vyaw) {
-    const msg = _buildSportMsg(API_MOVE, { x: vx, y: vy, rx: vyaw });
-    RosBridge.publish(SPORT_API, SPORT_MSG_TYPE, msg);
-  }
+  // ---- Sport Commands (one-shot) ----------------------------------------
 
   function _sportCmd(apiId, label) {
-    const msg = _buildSportMsg(apiId, {});
-    RosBridge.publish(SPORT_API, SPORT_MSG_TYPE, msg);
+    if (socket) {
+      socket.emit("sport_cmd", { api_id: apiId, label: label });
+    }
     document.getElementById("status-message").textContent = "Sport: " + label;
     console.log("[Controls] Sport command:", label, "api_id:", apiId);
-  }
-
-  function _buildSportMsg(apiId, params) {
-    return {
-      header: { identity: { id: Date.now() % 2147483647, api_id: apiId } },
-      parameter: JSON.stringify(params),
-      api_id: apiId,
-    };
   }
 
   // ---- Button helpers ---------------------------------------------------
