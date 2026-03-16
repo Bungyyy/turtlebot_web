@@ -578,6 +578,46 @@ def sport_topic_type():
     return jsonify({"ok": bool(msg_type), "type": msg_type})
 
 
+@app.route("/api/sport/debug")
+def sport_debug():
+    """Debug: show message type definition and test publish."""
+    msg_type = _resolve_sport_type()
+    info = {"type": msg_type}
+
+    # Get the full message definition
+    if msg_type:
+        try:
+            result = subprocess.run(
+                ["ros2", "interface", "show", msg_type],
+                capture_output=True, text=True, timeout=5,
+                env=_build_env(),
+            )
+            info["definition"] = result.stdout.strip()
+            info["def_stderr"] = result.stderr.strip()
+        except Exception as e:
+            info["def_error"] = str(e)
+
+        # Also show what we're trying to publish
+        info["yaml_example"] = _sport_yaml(1004, {})
+
+        # Try a test publish and capture output
+        yaml_msg = _sport_yaml(1004, {})
+        try:
+            result = subprocess.run(
+                ["ros2", "topic", "pub", "--once",
+                 "/api/sport/request", msg_type, yaml_msg],
+                capture_output=True, text=True, timeout=5,
+                env=_build_env(),
+            )
+            info["pub_rc"] = result.returncode
+            info["pub_stdout"] = result.stdout.strip()
+            info["pub_stderr"] = result.stderr.strip()
+        except Exception as e:
+            info["pub_error"] = str(e)
+
+    return jsonify(info)
+
+
 # ---------------------------------------------------------------------------
 # SocketIO events (thin relay – most comms go through roslibjs directly)
 # ---------------------------------------------------------------------------
