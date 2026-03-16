@@ -411,32 +411,72 @@ def camera_feed():
 
 
 # ---------------------------------------------------------------------------
-# Unitree Go2 Sport API – sends commands via ros2 topic pub
+# Unitree Go2 Sport API – sends commands via SSH → ros2 topic pub on Jetson
 # ---------------------------------------------------------------------------
 
+# SSH target for the Go2 Jetson — set from the web UI or default
+_sport_ssh_host = os.environ.get("GO2_SSH_HOST", "unitree@192.168.123.18")
 _sport_msg_type = None          # cached message type
-_sport_move_proc = None         # persistent ros2 topic pub process for velocity
+_sport_move_proc = None         # persistent ssh+ros2 topic pub for velocity
 _sport_move_lock = threading.Lock()
+
+# ROS2 env setup to source on the Jetson via SSH (same as bringup)
+_JETSON_ROS_SETUP = (
+    "source /opt/ros/humble/setup.bash 2>/dev/null || true; "
+    "source ~/go2_ws/install/setup.bash 2>/dev/null; "
+    f"export RMW_IMPLEMENTATION={RMW_IMPLEMENTATION}; "
+    f"export CYCLONEDDS_URI='{CYCLONEDDS_URI}'; "
+    + (f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID}; " if ROS_DOMAIN_ID else "")
+)
+
+
+def _ssh_cmd(remote_cmd, timeout=8):
+    """Run a command on the Jetson via SSH. Returns (returncode, stdout, stderr)."""
+    wrapped = _JETSON_ROS_SETUP + remote_cmd
+    cmd = [
+        "sshpass", "-p", SSH_PASSWORD,
+        "ssh", "-o", "StrictHostKeyChecking=no",
+        "-o", "ConnectTimeout=3",
+        _sport_ssh_host, wrapped,
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout,
+        )
+        return result.returncode, result.stdout.strip(), result.stderr.strip()
+    except subprocess.TimeoutExpired:
+        return -1, "", "timeout"
+    except Exception as e:
+        return -1, "", str(e)
+
+
+def _ssh_popen(remote_cmd):
+    """Start a persistent command on the Jetson via SSH. Returns Popen."""
+    wrapped = _JETSON_ROS_SETUP + remote_cmd
+    cmd = [
+        "sshpass", "-p", SSH_PASSWORD,
+        "ssh", "-o", "StrictHostKeyChecking=no",
+        "-o", "ConnectTimeout=3",
+        _sport_ssh_host, wrapped,
+    ]
+    return subprocess.Popen(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        preexec_fn=os.setsid,
+    )
 
 
 def _resolve_sport_type():
-    """Discover the message type of /api/sport/request via ros2 topic info."""
+    """Discover the message type of /api/sport/request on the Jetson."""
     global _sport_msg_type
     if _sport_msg_type:
         return _sport_msg_type
-    try:
-        result = subprocess.run(
-            ["ros2", "topic", "info", "/api/sport/request", "-t"],
-            capture_output=True, text=True, timeout=5,
-            env=_build_env(),
-        )
-        for line in result.stdout.splitlines():
-            if "Type:" in line:
-                _sport_msg_type = line.split("Type:")[-1].strip()
-                print(f"[Sport] Resolved topic type: {_sport_msg_type}")
-                return _sport_msg_type
-    except Exception as e:
-        print(f"[Sport] Could not resolve topic type: {e}")
+    rc, stdout, stderr = _ssh_cmd("ros2 topic info /api/sport/request -t")
+    for line in stdout.splitlines():
+        if "Type:" in line:
+            _sport_msg_type = line.split("Type:")[-1].strip()
+            print(f"[Sport] Resolved topic type: {_sport_msg_type}")
+            return _sport_msg_type
+    print(f"[Sport] Could not resolve type (rc={rc}): {stderr}")
     return None
 
 
@@ -445,88 +485,65 @@ def _sport_yaml(api_id, params):
     import json
     param_str = json.dumps(params) if isinstance(params, dict) else str(params)
     return (
-        "{"
-        f"header: {{stamp: {{sec: 0, nanosec: 0}}, frame_id: ''}}, "
-        f"parameter: '{param_str}', "
+        "'{{"
+        f"header: {{stamp: {{sec: 0, nanosec: 0}}, frame_id: \\'\\'}}, "
+        f"parameter: \\'{param_str}\\', "
         f"api_id: {api_id}"
-        "}"
+        "}}'"
     )
 
 
 def _sport_pub_once(api_id, params):
-    """Publish a single sport command via ros2 topic pub --once."""
+    """Publish a single sport command on the Jetson."""
     msg_type = _resolve_sport_type()
     if not msg_type:
         return False, "Cannot resolve /api/sport/request type"
     yaml_msg = _sport_yaml(api_id, params)
-    try:
-        result = subprocess.run(
-            ["ros2", "topic", "pub", "--once",
-             "/api/sport/request", msg_type, yaml_msg],
-            capture_output=True, text=True, timeout=5,
-            env=_build_env(),
-        )
-        if result.returncode == 0:
-            return True, msg_type
-        return False, result.stderr.strip() or result.stdout.strip()
-    except subprocess.TimeoutExpired:
-        return False, "timeout"
-    except Exception as e:
-        return False, str(e)
+    remote = f"ros2 topic pub --once /api/sport/request {msg_type} {yaml_msg}"
+    rc, stdout, stderr = _ssh_cmd(remote, timeout=10)
+    if rc == 0:
+        return True, msg_type
+    return False, stderr or stdout
 
 
 def _sport_move_start(vx, vy, vyaw):
-    """Start a persistent ros2 topic pub for velocity at 10Hz.
-
-    Kills any existing velocity publisher and starts a new one.
-    """
+    """Start a persistent velocity publisher on the Jetson at 10Hz."""
     global _sport_move_proc
     msg_type = _resolve_sport_type()
     if not msg_type:
         return
 
     yaml_msg = _sport_yaml(1008, {"x": vx, "y": vy, "rx": vyaw})
+    remote = f"ros2 topic pub --rate 10 /api/sport/request {msg_type} {yaml_msg}"
 
     with _sport_move_lock:
-        # Kill existing velocity publisher
-        if _sport_move_proc and _sport_move_proc.poll() is None:
-            try:
-                os.killpg(os.getpgid(_sport_move_proc.pid), signal.SIGTERM)
-                _sport_move_proc.wait(timeout=1)
-            except Exception:
-                try:
-                    os.killpg(os.getpgid(_sport_move_proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
-            _sport_move_proc = None
-
-        # Start new publisher at 10Hz
+        _kill_sport_move_proc()
         try:
-            _sport_move_proc = subprocess.Popen(
-                ["ros2", "topic", "pub", "--rate", "10",
-                 "/api/sport/request", msg_type, yaml_msg],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                preexec_fn=os.setsid,
-                env=_build_env(),
-            )
+            _sport_move_proc = _ssh_popen(remote)
+            print(f"[Sport] Move started: vx={vx} vy={vy} vyaw={vyaw}")
         except Exception as e:
             print(f"[Sport] Move start failed: {e}")
 
 
+def _kill_sport_move_proc():
+    """Kill the persistent velocity SSH process."""
+    global _sport_move_proc
+    if _sport_move_proc and _sport_move_proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(_sport_move_proc.pid), signal.SIGTERM)
+            _sport_move_proc.wait(timeout=2)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(_sport_move_proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+    _sport_move_proc = None
+
+
 def _sport_move_stop():
     """Stop the persistent velocity publisher."""
-    global _sport_move_proc
     with _sport_move_lock:
-        if _sport_move_proc and _sport_move_proc.poll() is None:
-            try:
-                os.killpg(os.getpgid(_sport_move_proc.pid), signal.SIGTERM)
-                _sport_move_proc.wait(timeout=1)
-            except Exception:
-                try:
-                    os.killpg(os.getpgid(_sport_move_proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
-        _sport_move_proc = None
+        _kill_sport_move_proc()
 
 
 @app.route("/api/sport", methods=["POST"])
@@ -539,7 +556,11 @@ def sport_command():
     if api_id is None:
         return jsonify({"ok": False, "error": "api_id required"}), 400
 
-    # Stop any ongoing movement before executing a stance command
+    # Update SSH host from request if provided
+    global _sport_ssh_host
+    if data.get("ssh_host"):
+        _sport_ssh_host = data["ssh_host"]
+
     _sport_move_stop()
 
     ok, detail = _sport_pub_once(api_id, parameter)
@@ -552,15 +573,16 @@ def sport_command():
 
 @app.route("/api/sport/move", methods=["POST"])
 def sport_move():
-    """Start/stop persistent velocity publishing for teleop.
-
-    POST { vx, vy, vyaw } — starts ros2 topic pub at 10Hz.
-    POST { vx:0, vy:0, vyaw:0 } — stops the publisher + sends StopMove.
-    """
+    """Start/stop persistent velocity publishing for teleop."""
     data = request.get_json(force=True)
     vx = float(data.get("vx", 0))
     vy = float(data.get("vy", 0))
     vyaw = float(data.get("vyaw", 0))
+
+    # Update SSH host from request if provided
+    global _sport_ssh_host
+    if data.get("ssh_host"):
+        _sport_ssh_host = data["ssh_host"]
 
     if vx == 0 and vy == 0 and vyaw == 0:
         _sport_move_stop()
@@ -580,40 +602,27 @@ def sport_topic_type():
 
 @app.route("/api/sport/debug")
 def sport_debug():
-    """Debug: show message type definition and test publish."""
+    """Debug: show message type definition and test publish on Jetson."""
     msg_type = _resolve_sport_type()
-    info = {"type": msg_type}
+    info = {"type": msg_type, "ssh_host": _sport_ssh_host}
 
-    # Get the full message definition
     if msg_type:
-        try:
-            result = subprocess.run(
-                ["ros2", "interface", "show", msg_type],
-                capture_output=True, text=True, timeout=5,
-                env=_build_env(),
-            )
-            info["definition"] = result.stdout.strip()
-            info["def_stderr"] = result.stderr.strip()
-        except Exception as e:
-            info["def_error"] = str(e)
+        # Get the message definition
+        rc, stdout, stderr = _ssh_cmd(f"ros2 interface show {msg_type}")
+        info["definition"] = stdout
+        info["def_stderr"] = stderr
 
-        # Also show what we're trying to publish
+        # Show what we're publishing
         info["yaml_example"] = _sport_yaml(1004, {})
 
-        # Try a test publish and capture output
+        # Test publish
         yaml_msg = _sport_yaml(1004, {})
-        try:
-            result = subprocess.run(
-                ["ros2", "topic", "pub", "--once",
-                 "/api/sport/request", msg_type, yaml_msg],
-                capture_output=True, text=True, timeout=5,
-                env=_build_env(),
-            )
-            info["pub_rc"] = result.returncode
-            info["pub_stdout"] = result.stdout.strip()
-            info["pub_stderr"] = result.stderr.strip()
-        except Exception as e:
-            info["pub_error"] = str(e)
+        remote = f"ros2 topic pub --once /api/sport/request {msg_type} {yaml_msg}"
+        rc, stdout, stderr = _ssh_cmd(remote, timeout=10)
+        info["pub_rc"] = rc
+        info["pub_stdout"] = stdout
+        info["pub_stderr"] = stderr
+        info["pub_cmd"] = remote
 
     return jsonify(info)
 
