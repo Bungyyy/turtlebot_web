@@ -40,6 +40,7 @@ const MapViewer = (() => {
   let panX = 0, panY = 0;
   let isDragging = false, dragStart = { x: 0, y: 0 }, dragMoved = false;
   let autoFitted = false;
+  let virtualCentered = false; // true once we center virtual view on first pose
   let interactionMode = null;
   let activeSubs = [];
 
@@ -49,34 +50,48 @@ const MapViewer = (() => {
   // World (meters) -> grid cell -> canvas pixels
   // Handles rotated map origins (common with Cartographer SLAM)
 
+  // Virtual coordinate system: pixels per meter when no OccupancyGrid exists.
+  // Allows rendering robot/laser/trail in FAST-LIO2 mode (no /map topic).
+  const VIRTUAL_PPM = 50; // 50 pixels per meter (like 0.02 m/px resolution)
+
   function _worldToCanvas(wx, wy) {
-    if (!mapData) return { cx: 0, cy: 0 };
-    const info = mapData.info;
-    const dx = wx - info.origin.position.x;
-    const dy = wy - info.origin.position.y;
-    // Rotate into map-local frame if origin has orientation
-    const cosO = Math.cos(-mapOriginYaw);
-    const sinO = Math.sin(-mapOriginYaw);
-    const lx = cosO * dx - sinO * dy;
-    const ly = sinO * dx + cosO * dy;
-    const col = lx / info.resolution;
-    const row = info.height - ly / info.resolution;
-    return { cx: col * scale + panX, cy: row * scale + panY };
+    if (mapData) {
+      const info = mapData.info;
+      const dx = wx - info.origin.position.x;
+      const dy = wy - info.origin.position.y;
+      const cosO = Math.cos(-mapOriginYaw);
+      const sinO = Math.sin(-mapOriginYaw);
+      const lx = cosO * dx - sinO * dy;
+      const ly = sinO * dx + cosO * dy;
+      const col = lx / info.resolution;
+      const row = info.height - ly / info.resolution;
+      return { cx: col * scale + panX, cy: row * scale + panY };
+    }
+    // Virtual mode: world origin at canvas center + pan, Y-up → Y-down
+    return {
+      cx: panX + wx * VIRTUAL_PPM * scale,
+      cy: panY - wy * VIRTUAL_PPM * scale,
+    };
   }
 
   function _canvasToWorld(cx, cy) {
-    if (!mapData) return { x: 0, y: 0 };
-    const info = mapData.info;
-    const col = (cx - panX) / scale;
-    const row = (cy - panY) / scale;
-    const lx = col * info.resolution;
-    const ly = (info.height - row) * info.resolution;
-    // Rotate back from map-local frame to world frame
-    const cosO = Math.cos(mapOriginYaw);
-    const sinO = Math.sin(mapOriginYaw);
+    if (mapData) {
+      const info = mapData.info;
+      const col = (cx - panX) / scale;
+      const row = (cy - panY) / scale;
+      const lx = col * info.resolution;
+      const ly = (info.height - row) * info.resolution;
+      const cosO = Math.cos(mapOriginYaw);
+      const sinO = Math.sin(mapOriginYaw);
+      return {
+        x: info.origin.position.x + cosO * lx - sinO * ly,
+        y: info.origin.position.y + sinO * lx + cosO * ly,
+      };
+    }
+    // Virtual mode inverse
     return {
-      x: info.origin.position.x + cosO * lx - sinO * ly,
-      y: info.origin.position.y + sinO * lx + cosO * ly,
+      x: (cx - panX) / (VIRTUAL_PPM * scale),
+      y: -(cy - panY) / (VIRTUAL_PPM * scale),
     };
   }
 
@@ -172,6 +187,12 @@ const MapViewer = (() => {
         robotPose = odomPose; // raw odom fallback
       }
       if (robotPose) {
+        // Auto-center virtual view on first pose when no map exists
+        if (!mapData && !virtualCentered && canvas) {
+          virtualCentered = true;
+          panX = canvas.width / 2 - robotPose.x * VIRTUAL_PPM * scale;
+          panY = canvas.height / 2 + robotPose.y * VIRTUAL_PPM * scale;
+        }
         _pushTrail(robotPose);
         _render();
       }
@@ -449,8 +470,10 @@ const MapViewer = (() => {
     ctx.fillStyle = "#b8b8b8";
     ctx.fillRect(0, 0, W, H);
 
+    const hasMap = !!(mapImage && mapData);
+
     // 1. Occupancy grid
-    if (mapImage && mapData && layers.map) {
+    if (hasMap && layers.map) {
       ctx.save();
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(mapImage, panX, panY, mapData.info.width * scale, mapData.info.height * scale);
@@ -459,17 +482,17 @@ const MapViewer = (() => {
     }
 
     // 2. Global costmap overlay
-    if (globalCostmapImage && globalCostmapData && mapData && layers.costmap) {
+    if (globalCostmapImage && globalCostmapData && hasMap && layers.costmap) {
       _drawCostmapOverlay(globalCostmapImage, globalCostmapData, 0.5);
     }
 
     // 2b. Local costmap overlay (on top of global)
-    if (costmapImage && costmapData && mapData && layers.costmap) {
+    if (costmapImage && costmapData && hasMap && layers.costmap) {
       _drawCostmapOverlay(costmapImage, costmapData, 0.7);
     }
 
     // 3. Grid
-    if (layers.grid && mapData) _drawGrid();
+    if (layers.grid && hasMap) _drawGrid();
 
     // 4. Odom trail
     if (layers.odom && odomTrail.length > 1) _drawOdomTrail();
@@ -481,20 +504,20 @@ const MapViewer = (() => {
     if (layers.laser && laserPoints.length > 0) _drawLaserScan();
 
     // 7. Home marker
-    if (mapData) _drawMarker(homePose.x, homePose.y, "#e53e3e", "H");
+    _drawMarker(homePose.x, homePose.y, "#e53e3e", "H");
 
     // 8. Goal marker
-    if (goalPose && mapData) _drawMarker(goalPose.x, goalPose.y, "#3182ce", "G");
+    if (goalPose) _drawMarker(goalPose.x, goalPose.y, "#3182ce", "G");
 
     // 9. Robot (green triangle)
-    if (robotPose && mapData && layers.robot) _drawRobot();
+    if (robotPose && layers.robot) _drawRobot();
 
     // 10. TF frames
-    if (robotPose && mapData && layers.tf) _drawTFAxes(robotPose, "base_link");
-    if (mapData && layers.tf) _drawTFAxes({ x:0, y:0, theta:0 }, "map");
+    if (robotPose && layers.tf) _drawTFAxes(robotPose, "base_link");
+    if (layers.tf) _drawTFAxes({ x:0, y:0, theta:0 }, "map");
 
     // 11. Debug: show robot world coords on canvas
-    if (robotPose && mapData) {
+    if (robotPose) {
       const src = tfMapToOdom ? "odom+TF" : (hasAmcl ? "AMCL" : "odom");
       const dbg = src + " (" + robotPose.x.toFixed(2) + ", " + robotPose.y.toFixed(2) + ") " +
                   (robotPose.theta * 180 / Math.PI).toFixed(0) + "\u00b0";
@@ -509,8 +532,12 @@ const MapViewer = (() => {
       ctx.restore();
     }
 
-    // 12. Warning
-    if (!tfMapToOdom && !hasAmcl && odomPose && mapData) {
+    // 12. Warning: no map topic
+    if (!hasMap && robotPose) {
+      ctx.fillStyle = "rgba(180,80,0,0.9)";
+      ctx.font = "bold 11px monospace";
+      ctx.fillText("No /map topic \u2014 FAST-LIO2 mode (laser + odom only)", 10, H - 30);
+    } else if (!tfMapToOdom && !hasAmcl && odomPose && hasMap) {
       ctx.fillStyle = "rgba(180,80,0,0.9)";
       ctx.font = "bold 11px monospace";
       ctx.fillText("No map\u2192odom TF \u2014 robot position approximate", 10, H - 30);
@@ -764,7 +791,7 @@ const MapViewer = (() => {
   }
 
   function _centerOnRobot() {
-    if (!robotPose || !mapData || !canvas) return;
+    if (!robotPose || !canvas) return;
     // Use the same coordinate conversion as _worldToCanvas
     const { cx, cy } = _worldToCanvas(robotPose.x, robotPose.y);
     panX += canvas.width / 2 - cx;
@@ -773,7 +800,7 @@ const MapViewer = (() => {
   }
 
   function _onMouseMoveCoords(e) {
-    if (!mapData) return;
+    if (!mapData && !robotPose) return;
     const rect = canvas.getBoundingClientRect();
     const w = _canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
     const el = document.getElementById("map-cursor-pos");
