@@ -470,13 +470,13 @@ def _resolve_sport_type():
     global _sport_msg_type
     if _sport_msg_type:
         return _sport_msg_type
-    rc, stdout, stderr = _ssh_cmd("ros2 topic info /api/sport/request -t")
+    rc, stdout, stderr = _ssh_cmd("ros2 topic info /api/sport/request")
     for line in stdout.splitlines():
         if "Type:" in line:
             _sport_msg_type = line.split("Type:")[-1].strip()
             print(f"[Sport] Resolved topic type: {_sport_msg_type}")
             return _sport_msg_type
-    print(f"[Sport] Could not resolve type (rc={rc}): {stderr}")
+    print(f"[Sport] Could not resolve type (rc={rc}): stdout={stdout} stderr={stderr}")
     return None
 
 
