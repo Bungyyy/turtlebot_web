@@ -93,12 +93,20 @@
     if (el) { el.textContent = text; el.className = "step-badge " + (cls || ""); }
   }
 
+  // Helper: build launch body with SSH credentials
+  function _launchBody(name, extra) {
+    const body = { name, ...extra };
+    const sshHost = document.getElementById("ssh-host").value.trim();
+    const sshPassword = document.getElementById("ssh-password").value;
+    if (sshHost) body.ssh_host = sshHost;
+    if (sshPassword) body.ssh_password = sshPassword;
+    return body;
+  }
+
   // ---- STEP 1: Robot Connection (Bringup + ROS Bridge) -------------------
 
   document.getElementById("btn-bringup").addEventListener("click", async () => {
     const btn = document.getElementById("btn-bringup");
-    const sshHost = document.getElementById("ssh-host").value.trim();
-
     if (LaunchManager.isRunning("bringup")) {
       btn.textContent = "Stopping...";
       await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "bringup" }) });
@@ -111,9 +119,7 @@
     btn.textContent = "Starting...";
     _setStatus("Starting robot bringup...");
 
-    const body = { name: "bringup" };
-    if (sshHost) body.ssh_host = sshHost;
-
+    const body = _launchBody("bringup");
     const res = await (await fetch("/api/launch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -123,6 +129,7 @@
     if (res.ok) {
       btn.textContent = "Stop Bringup";
       _updateStepBadge("step1-badge", "Running", "badge-ok");
+      const sshHost = document.getElementById("ssh-host").value.trim();
       _setStatus("Robot bringup started" + (sshHost ? ` on ${sshHost}` : ""));
     } else {
       btn.textContent = "Start Bringup";
@@ -146,7 +153,7 @@
     const res = await (await fetch("/api/launch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "rosbridge" }),
+      body: JSON.stringify(_launchBody("rosbridge")),
     })).json();
 
     if (res.ok) {
@@ -240,7 +247,7 @@
     const res = await (await fetch("/api/launch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "slam" }),
+      body: JSON.stringify(_launchBody("slam")),
     })).json();
 
     if (res.ok) {
@@ -283,7 +290,7 @@
     const res = await (await fetch("/api/launch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "navigation", args }),
+      body: JSON.stringify(_launchBody("navigation", { args })),
     })).json();
 
     if (res.ok) {
