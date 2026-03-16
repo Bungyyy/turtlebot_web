@@ -1,9 +1,9 @@
 /**
- * Main Application Entry Point
- * Wires together all modules and handles tab switching.
+ * Main Application Entry Point — Unitree Go2 Web Teleop
+ * Wires together all modules, handles tab switching, Go2 state subscription.
  */
 
-/* global RosBridge, MapViewer, Controls, Waypoints, Camera, LaunchManager */
+/* global RosBridge, MapViewer, Controls, Waypoints, Camera, LaunchManager, ROSLIB */
 
 (function () {
   "use strict";
@@ -48,10 +48,11 @@
     badge.textContent = "ROS Connected";
     badge.className = "badge badge-connected";
     setNodeStatus("node-rosbridge", true);
-    _setStatus("Connected to rosbridge");
+    _setStatus("Connected to rosbridge — teleop via ROS Bridge active");
 
     MapViewer.subscribeTopics();
     Controls.start();
+    _subscribeGo2State();
     _checkNodes();
     _checkTopics();
   });
@@ -62,7 +63,7 @@
     ["node-rosbridge", "node-turtlebot", "node-slam", "node-navigation", "node-camera"]
       .forEach((id) => setNodeStatus(id, false));
     Controls.stop();
-    _setStatus("Disconnected – reconnecting...");
+    _setStatus("Disconnected — reconnecting...");
 
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => { reconnectTimer = null; _connect(); }, 3000);
@@ -93,7 +94,6 @@
     if (el) { el.textContent = text; el.className = "step-badge " + (cls || ""); }
   }
 
-  // Helper: build launch body with SSH credentials
   function _launchBody(name, extra) {
     const body = { name, ...extra };
     const sshHost = document.getElementById("ssh-host").value.trim();
@@ -101,6 +101,81 @@
     if (sshHost) body.ssh_host = sshHost;
     if (sshPassword) body.ssh_password = sshPassword;
     return body;
+  }
+
+  // ---- Go2 State Subscription (via rosbridge) ----------------------------
+
+  let go2StateSub = null;
+
+  function _subscribeGo2State() {
+    // Try subscribing to Go2 sport mode state for battery, mode, gait info
+    // Topic name varies: /sportmodestate, /go2/sportmodestate, /lowstate, etc.
+    const topicCandidates = [
+      { topic: "/sportmodestate", type: "unitree_go2_msgs/msg/SportModeState" },
+      { topic: "/go2/sportmodestate", type: "unitree_go2_msgs/msg/SportModeState" },
+      { topic: "/lowstate", type: "unitree_go2_msgs/msg/LowState" },
+    ];
+
+    // Check available topics then subscribe
+    RosBridge.callService("/rosapi/topics", "rosapi/srv/Topics", {})
+      .then((result) => {
+        const topics = result.topics || [];
+
+        for (const candidate of topicCandidates) {
+          if (topics.includes(candidate.topic)) {
+            console.log("[Main] Subscribing to Go2 state:", candidate.topic);
+            go2StateSub = RosBridge.subscribe(candidate.topic, candidate.type, _onGo2State, { throttle: 500 });
+            return;
+          }
+        }
+
+        // Also try to get battery from /bms_state if available
+        if (topics.includes("/bms_state")) {
+          RosBridge.subscribe("/bms_state", "unitree_go2_msgs/msg/BmsState", (msg) => {
+            _updateBattery(msg.soc || msg.battery_percentage || 0);
+          }, { throttle: 2000 });
+        }
+
+        console.log("[Main] No Go2 state topic found — status panel will show limited info");
+      })
+      .catch(() => {
+        console.log("[Main] Could not query topics for Go2 state");
+      });
+  }
+
+  function _onGo2State(msg) {
+    // SportModeState: mode, gait_type, progress, foot_raise_height, body_height, velocity, imu, etc.
+    const modeEl = document.getElementById("go2-mode");
+    const gaitEl = document.getElementById("go2-gait");
+
+    if (modeEl && msg.mode !== undefined) {
+      const modeNames = { 0: "Idle", 1: "Balancing", 2: "Locomotion", 3: "Lidar Stance", 5: "AI Sport", 7: "Jump", 8: "Go Stairs" };
+      modeEl.textContent = modeNames[msg.mode] || `Mode ${msg.mode}`;
+    }
+
+    if (gaitEl && msg.gait_type !== undefined) {
+      const gaitNames = { 0: "Idle", 1: "Trot", 2: "Trot Running", 3: "Climb Stairs", 4: "Trot Obstacle" };
+      gaitEl.textContent = gaitNames[msg.gait_type] || `Gait ${msg.gait_type}`;
+    }
+
+    // Battery (if available in sport mode state)
+    if (msg.bms_state && msg.bms_state.soc !== undefined) {
+      _updateBattery(msg.bms_state.soc);
+    }
+  }
+
+  function _updateBattery(pct) {
+    const fill = document.getElementById("go2-battery-fill");
+    const label = document.getElementById("go2-battery-pct");
+    if (!fill || !label) return;
+
+    const p = Math.max(0, Math.min(100, pct));
+    fill.style.width = p + "%";
+    label.textContent = p + "%";
+
+    fill.classList.remove("low", "medium");
+    if (p < 20) fill.classList.add("low");
+    else if (p < 50) fill.classList.add("medium");
   }
 
   // ---- STEP 1: Robot Connection (Bringup + ROS Bridge) -------------------
@@ -119,18 +194,16 @@
     btn.textContent = "Starting...";
     _setStatus("Starting robot bringup...");
 
-    const body = _launchBody("bringup");
     const res = await (await fetch("/api/launch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(_launchBody("bringup")),
     })).json();
 
     if (res.ok) {
       btn.textContent = "Stop Bringup";
       _updateStepBadge("step1-badge", "Running", "badge-ok");
-      const sshHost = document.getElementById("ssh-host").value.trim();
-      _setStatus("Robot bringup started" + (sshHost ? ` on ${sshHost}` : ""));
+      _setStatus("Robot bringup started");
     } else {
       btn.textContent = "Start Bringup";
       _setStatus("Bringup failed: " + (res.message || res.error));
@@ -159,7 +232,6 @@
     if (res.ok) {
       btn.textContent = "Stop ROS Bridge";
       _setStatus("ROS Bridge started — connecting...");
-      // Auto-set rosbridge host to the robot IP from SSH host field
       const sshHost = document.getElementById("ssh-host").value.trim();
       if (sshHost) {
         const ip = sshHost.includes("@") ? sshHost.split("@")[1] : sshHost;
@@ -184,7 +256,6 @@
     logVisible = !logVisible;
     logEl.style.display = logVisible ? "block" : "none";
     logBtn.textContent = logVisible ? "Hide Log" : "Show Log";
-
     if (logVisible) {
       _pollLog();
       logPollTimer = setInterval(_pollLog, 2000);
@@ -197,7 +268,6 @@
   let _lastLaunchedProcess = "bringup";
 
   async function _pollLog() {
-    // Show log for the last launched process first (even if stopped/failed)
     const order = [_lastLaunchedProcess, "slam", "navigation", "bringup", "rosbridge"];
     const seen = new Set();
     for (const name of order) {
@@ -231,7 +301,6 @@
   }
 
   btnSlam.addEventListener("click", async () => {
-    // If SLAM is already running, stop it
     if (LaunchManager.isRunning("slam")) {
       _setStatus("Stopping SLAM...");
       await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "slam" }) });
@@ -246,7 +315,6 @@
     _setStatus("Starting SLAM...");
     _lastLaunchedProcess = "slam";
 
-    // Stop Navigation if running
     if (LaunchManager.isRunning("navigation")) {
       await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "navigation" }) });
     }
@@ -266,7 +334,6 @@
   });
 
   btnNav.addEventListener("click", async () => {
-    // If Navigation is already running, stop it
     if (LaunchManager.isRunning("navigation")) {
       _setStatus("Stopping Navigation...");
       await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "navigation" }) });
@@ -288,7 +355,6 @@
     _setStatus("Starting Navigation...");
     _lastLaunchedProcess = "navigation";
 
-    // Stop SLAM if running
     if (LaunchManager.isRunning("slam")) {
       await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "slam" }) });
     }
@@ -302,7 +368,7 @@
 
     if (res.ok) {
       _updateStepBadge("step2-badge", "Nav", "badge-nav");
-      _setStatus("Navigation started — use buttons below to control");
+      _setStatus("Navigation started — use controls or click map to navigate");
     } else {
       _setStatus("Nav: " + (res.message || res.error));
     }
@@ -319,12 +385,10 @@
     MapViewer.setMode("navigate");
     const navNode = document.getElementById("node-navigation");
     const navOk = navNode && navNode.classList.contains("online");
-    const hint = navOk ? "" : " (start Navigation mode first)";
-    _setStatus("Click on the map to set goal" + hint);
+    _setStatus("Click on the map to set goal" + (navOk ? "" : " (start Navigation first)"));
   });
 
-  // ---- Save map (toolbar + SLAM controls) --------------------------------
-
+  // Save map
   document.getElementById("btn-save-map").addEventListener("click", () => {
     LaunchManager.saveMap();
   });
@@ -332,7 +396,6 @@
   // ---- Update button text based on process status -------------------------
 
   setInterval(() => {
-    // Bringup button
     const bringBtn = document.getElementById("btn-bringup");
     if (LaunchManager.isRunning("bringup")) {
       bringBtn.textContent = "Stop Bringup";
@@ -342,7 +405,6 @@
       _updateStepBadge("step1-badge", "Offline", "");
     }
 
-    // ROS Bridge button
     const rbBtn = document.getElementById("btn-rosbridge");
     if (LaunchManager.isRunning("rosbridge")) {
       rbBtn.textContent = "Stop ROS Bridge";
@@ -350,14 +412,12 @@
       rbBtn.textContent = "Start ROS Bridge";
     }
 
-    // SLAM / Nav badges
     if (LaunchManager.isRunning("slam")) {
       _updateStepBadge("step2-badge", "FAST-LIO2", "badge-slam");
     } else if (LaunchManager.isRunning("navigation")) {
       _updateStepBadge("step2-badge", "Nav", "badge-nav");
     }
 
-    // Refresh node status indicators
     if (RosBridge.isConnected()) _checkNodes();
   }, 3000);
 
@@ -379,7 +439,7 @@
           console.log("[Main] ROS nodes:", nodes);
         }
 
-        const hasTurtlebot = nodes.some((n) =>
+        const hasGo2 = nodes.some((n) =>
           n.includes("go2") || n.includes("unitree") ||
           n.includes("robot_state_publisher")
         );
@@ -397,45 +457,37 @@
         const hasMapServer = nodes.some((n) => n.includes("map_server"));
         const hasCamera = nodes.some((n) => n.includes("camera") || n.includes("image") || n.includes("astra"));
 
-        // Footer status bar
-        setNodeStatus("node-turtlebot", hasTurtlebot);
+        setNodeStatus("node-turtlebot", hasGo2);
         setNodeStatus("node-slam", hasSlam || hasAmcl);
         setNodeStatus("node-navigation", hasNav);
         setNodeStatus("node-camera", hasCamera);
 
-        // Map node status bar (like KraiPlatform)
-        _setRosNode("rn-rosbridge", true); // if we're here, rosbridge is up
-        _setRosNode("rn-turtlebot", hasTurtlebot);
+        _setRosNode("rn-rosbridge", true);
+        _setRosNode("rn-turtlebot", hasGo2);
         _setRosNode("rn-slam", hasSlam);
         _setRosNode("rn-amcl", hasAmcl);
         _setRosNode("rn-navigation", hasNav);
         _setRosNode("rn-map-server", hasMapServer);
       })
-      .catch((err) => {
-        console.warn("[Main] Could not query /rosapi/nodes:", err);
-      });
+      .catch(() => {});
   }
 
   // ---- Topic availability check -----------------------------------------
 
   function _checkTopics() {
-    // Check via rosapi (through rosbridge WebSocket)
     RosBridge.callService("/rosapi/topics", "rosapi/srv/Topics", {})
       .then((result) => {
         const topics = result.topics || [];
-        console.log("[Main] ROS topics (via rosbridge):", topics);
-        const hasMap = topics.some((t) => t === "/map");
-        const hasScan = topics.some((t) => t === "/scan");
-        const hasOdom = topics.some((t) => t === "/odom");
-        const hasCmdVel = topics.some((t) => t === "/cmd_vel");
-        console.log("[Main] Key topics: /map=" + hasMap + " /scan=" + hasScan + " /odom=" + hasOdom + " /cmd_vel=" + hasCmdVel);
-        if (!hasMap && !hasScan && !hasOdom) {
+        console.log("[Main] ROS topics:", topics.length, "total");
+        const hasScan = topics.includes("/scan");
+        const hasOdom = topics.includes("/odom");
+        const hasCmdVel = topics.includes("/cmd_vel");
+        console.log("[Main] Key: /scan=" + hasScan + " /odom=" + hasOdom + " /cmd_vel=" + hasCmdVel);
+        if (!hasScan && !hasOdom) {
           _setStatus("Warning: No robot topics found — is bringup running?");
         }
       })
-      .catch((err) => {
-        console.warn("[Main] Could not query /rosapi/topics:", err);
-        // Fallback: try server-side topic check
+      .catch(() => {
         _checkTopicsServerSide();
       });
   }
@@ -445,23 +497,17 @@
       .then((r) => r.json())
       .then((data) => {
         if (data.ok && data.topics) {
-          console.log("[Main] ROS topics (server-side):", data.topics);
-          const hasMap = data.topics.some((t) => t === "/map");
-          const hasScan = data.topics.some((t) => t === "/scan");
-          const hasOdom = data.topics.some((t) => t === "/odom");
+          const hasScan = data.topics.includes("/scan");
+          const hasOdom = data.topics.includes("/odom");
           if (!hasScan && !hasOdom) {
-            _setStatus("No /scan or /odom — robot topics not visible. Check ROS_DOMAIN_ID matches robot.");
-          } else if (!hasMap) {
-            _setStatus("Warning: /map topic missing — SLAM may not have data yet");
+            _setStatus("No robot topics visible. Check ROS_DOMAIN_ID matches robot.");
           }
-          return data;
         }
-        return data;
       })
       .catch(() => {});
   }
 
-  // ---- Check Topics button (Settings page) --------------------------------
+  // ---- Check Topics button (Settings) ------------------------------------
 
   const checkTopicsBtn = document.getElementById("btn-check-topics");
   if (checkTopicsBtn) {
@@ -471,36 +517,23 @@
       output.textContent = "Checking via rosbridge...";
 
       if (!RosBridge.isConnected()) {
-        output.textContent = "Not connected to rosbridge. Start ROS Bridge first.";
+        output.textContent = "Not connected to rosbridge.";
         return;
       }
 
       try {
         const result = await RosBridge.callService("/rosapi/topics", "rosapi/srv/Topics", {});
         const topics = (result.topics || []).sort();
-        const scan = topics.includes("/scan") ? "YES" : "NO";
-        const odom = topics.includes("/odom") ? "YES" : "NO";
-        const map = topics.includes("/map") ? "YES" : "NO";
-        const cmdVel = topics.includes("/cmd_vel") ? "YES" : "NO";
+        const check = (t) => topics.includes(t) ? "YES" : "NO";
         output.textContent =
-          `Key topics:\n  /scan: ${scan}\n  /odom: ${odom}\n  /map: ${map}\n  /cmd_vel: ${cmdVel}\n\n` +
+          `Key topics:\n  /scan: ${check("/scan")}\n  /odom: ${check("/odom")}\n  /map: ${check("/map")}\n  /cmd_vel: ${check("/cmd_vel")}\n  /api/sport/request: ${check("/api/sport/request")}\n\n` +
           `All topics (${topics.length}):\n` + topics.join("\n");
-        if (scan === "NO" && odom === "NO") {
-          output.textContent += "\n\n⚠ Robot topics missing!\nCheck bringup is running.";
-        }
       } catch (e) {
-        output.textContent = "Rosbridge query failed: " + e.message + "\nFalling back to local check...";
+        output.textContent = "Query failed: " + e.message;
         try {
           const data = await (await fetch("/api/ros2/topics")).json();
-          if (data.ok) {
-            const topics = data.topics;
-            output.textContent = `All topics (${topics.length}):\n` + topics.join("\n");
-          } else {
-            output.textContent = "Error: " + (data.error || "unknown");
-          }
-        } catch (e2) {
-          output.textContent = "Failed: " + e2.message;
-        }
+          if (data.ok) output.textContent = `Topics (${data.topics.length}):\n` + data.topics.join("\n");
+        } catch (_) {}
       }
     });
   }

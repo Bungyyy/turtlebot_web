@@ -1,5 +1,6 @@
 /* ============================================================
-   TurtleBot3 Web Control – Stylesheet
+   Unitree Go2 Web Teleop – Stylesheet
+   ROS Bridge-first teleop with virtual joystick & gamepad
    ============================================================ */
 
 /* ---------- Reset & Base ---------- */
@@ -17,6 +18,7 @@
   --accent-red:    #ef4444;
   --accent-orange: #f59e0b;
   --accent-purple: #8b5cf6;
+  --accent-cyan:   #06b6d4;
   --radius:        8px;
   --nav-height:    48px;
   --footer-height: 32px;
@@ -51,7 +53,7 @@ html, body {
   font-size: 16px;
 }
 
-.brand-icon { font-size: 20px; color: var(--accent-blue); }
+.brand-icon { font-size: 20px; }
 
 .nav-tabs {
   display: flex;
@@ -71,7 +73,7 @@ html, body {
 .nav-tabs li:hover { background: var(--bg-card); color: var(--text-primary); }
 .nav-tabs li.active { background: var(--accent-blue); color: #fff; }
 
-.nav-right { margin-left: auto; }
+.nav-right { margin-left: auto; display: flex; gap: 10px; align-items: center; }
 
 .badge {
   padding: 4px 12px;
@@ -82,6 +84,22 @@ html, body {
 
 .badge-disconnected { background: var(--accent-red); color: #fff; }
 .badge-connected    { background: var(--accent-green); color: #fff; }
+
+.gamepad-badge {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.gamepad-badge.connected {
+  background: var(--accent-cyan);
+  color: #fff;
+  border-color: var(--accent-cyan);
+}
 
 /* ---------- Main Content ---------- */
 #main-content {
@@ -119,81 +137,13 @@ html, body {
 /* ---------- Panel Grid (Mobile tab) ---------- */
 .panel-grid {
   display: grid;
-  grid-template-columns: 280px 1fr 300px;
+  grid-template-columns: 300px 1fr 280px;
   gap: 10px;
   padding: 10px;
   height: 100%;
 }
 
 .col-left, .col-right { overflow-y: auto; }
-
-/* ---------- Status Card ---------- */
-.status-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding: 10px 14px;
-}
-
-.status-group h4 {
-  font-size: 11px;
-  text-transform: uppercase;
-  color: var(--accent-blue);
-  margin-bottom: 6px;
-  letter-spacing: .5px;
-}
-
-.status-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 2px 0;
-  font-size: 13px;
-}
-
-.status-row label {
-  color: var(--text-secondary);
-  font-weight: 600;
-  min-width: 20px;
-}
-
-.status-row span {
-  font-family: 'Courier New', monospace;
-  color: var(--accent-green);
-}
-
-/* ---------- Toggle Switch ---------- */
-.switch {
-  position: relative;
-  display: inline-block;
-  width: 44px;
-  height: 22px;
-}
-
-.switch input { opacity: 0; width: 0; height: 0; }
-
-.slider {
-  position: absolute;
-  cursor: pointer;
-  inset: 0;
-  background: var(--bg-input);
-  border-radius: 22px;
-  transition: .3s;
-}
-
-.slider::before {
-  content: "";
-  position: absolute;
-  height: 16px;
-  width: 16px;
-  left: 3px;
-  bottom: 3px;
-  background: #fff;
-  border-radius: 50%;
-  transition: .3s;
-}
-
-.switch input:checked + .slider { background: var(--accent-green); }
-.switch input:checked + .slider::before { transform: translateX(22px); }
 
 /* ---------- Workflow Cards ---------- */
 .card-workflow .card-header { display: flex; align-items: center; justify-content: space-between; }
@@ -208,14 +158,11 @@ html, body {
 }
 
 .step-badge.badge-ok { background: var(--accent-green); color: #fff; }
-.step-badge.badge-slam { background: var(--accent-orange, #e67e22); color: #fff; }
+.step-badge.badge-slam { background: var(--accent-orange); color: #fff; }
 .step-badge.badge-nav { background: var(--accent-blue); color: #fff; }
 
 .wf-body { padding: 8px 14px 12px; }
-
-.wf-row {
-  margin-bottom: 6px;
-}
+.wf-row { margin-bottom: 6px; }
 
 .btn-link {
   background: none;
@@ -272,17 +219,8 @@ html, body {
 .btn-mode:hover { border-color: var(--accent-blue); color: var(--text-primary); }
 .btn-mode.active { background: var(--accent-blue); color: #fff; border-color: var(--accent-blue); }
 
-/* Mode sub-controls (save map / map selector) */
-.mode-sub {
-  padding: 8px 14px;
-  border-top: 1px solid var(--border);
-}
-
-.mode-sub-row {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
+.mode-sub { padding: 8px 14px; border-top: 1px solid var(--border); }
+.mode-sub-row { display: flex; gap: 6px; align-items: center; }
 
 .input-sm {
   flex: 1;
@@ -295,12 +233,7 @@ html, body {
 }
 
 select.input-sm { cursor: pointer; }
-
-.btn-sm {
-  padding: 6px 12px !important;
-  font-size: 12px !important;
-  white-space: nowrap;
-}
+.btn-sm { padding: 6px 12px !important; font-size: 12px !important; white-space: nowrap; }
 
 /* ---------- Action Buttons ---------- */
 .action-buttons {
@@ -327,7 +260,84 @@ select.input-sm { cursor: pointer; }
 .btn-action.btn-primary:hover { background: #2563eb; }
 .btn-action.active { background: var(--accent-purple); border-color: var(--accent-purple); color: #fff; }
 
-/* ---------- D-Pad ---------- */
+/* ---------- Go2 Status Panel ---------- */
+.go2-status-body {
+  padding: 8px 14px 10px;
+}
+
+.go2-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.go2-label {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.go2-value {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.go2-value.mono {
+  font-family: 'Courier New', monospace;
+}
+
+/* Battery bar */
+.battery-bar {
+  display: inline-block;
+  width: 60px;
+  height: 12px;
+  background: var(--bg-input);
+  border-radius: 3px;
+  overflow: hidden;
+  vertical-align: middle;
+  margin-right: 6px;
+  border: 1px solid var(--border);
+}
+
+.battery-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent-green);
+  transition: width 1s, background 1s;
+}
+
+.battery-fill.low { background: var(--accent-red); }
+.battery-fill.medium { background: var(--accent-orange); }
+
+/* Velocity display */
+.vel-display {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+}
+
+.vel-display.stopped { color: var(--text-secondary); }
+.vel-display.moving { color: var(--accent-cyan); font-weight: 600; }
+
+/* Teleop mode label */
+.teleop-mode-label {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.teleop-mode-label.mode-rosbridge {
+  background: rgba(6,182,212,0.2);
+  color: var(--accent-cyan);
+}
+
+.teleop-mode-label.mode-relay {
+  background: rgba(245,158,11,0.2);
+  color: var(--accent-orange);
+}
+
+/* ---------- D-Pad (8-direction for quadruped) ---------- */
 .card-controls { padding-bottom: 14px; }
 
 .speed-control {
@@ -339,20 +349,20 @@ select.input-sm { cursor: pointer; }
   color: var(--text-secondary);
 }
 
-.speed-control label { min-width: 100px; }
+.speed-control label { min-width: 60px; }
 .speed-control input[type="range"] { flex: 1; accent-color: var(--accent-blue); }
 
-.dpad {
+.dpad-8dir {
   display: grid;
   grid-template-areas:
-    ".    up    ."
-    "left stop  right"
-    ".    down  .";
+    ".        up       ."
+    "strafe-l stop     strafe-r"
+    "left     down     right";
   grid-template-columns: repeat(3, 60px);
-  grid-template-rows: repeat(3, 52px);
+  grid-template-rows: repeat(3, 50px);
   gap: 4px;
   justify-content: center;
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 .dpad-btn {
@@ -367,24 +377,88 @@ select.input-sm { cursor: pointer; }
   justify-content: center;
   transition: .1s;
   user-select: none;
+  -webkit-user-select: none;
 }
 
 .dpad-btn:hover { background: #3a3f4b; }
 .dpad-btn:active, .dpad-btn.pressed { background: var(--accent-blue); border-color: var(--accent-blue); }
 
-.dpad-up     { grid-area: up; }
-.dpad-left   { grid-area: left; }
-.dpad-center { grid-area: stop; font-size: 11px; font-weight: 700; background: var(--accent-red); border-color: var(--accent-red); color: #fff; }
+.dpad-up       { grid-area: up; }
+.dpad-left     { grid-area: left; font-size: 20px; }
+.dpad-center   { grid-area: stop; font-size: 11px; font-weight: 700; background: var(--accent-red); border-color: var(--accent-red); color: #fff; }
 .dpad-center:hover { background: #dc2626; }
-.dpad-right  { grid-area: right; }
-.dpad-down   { grid-area: down; }
+.dpad-right    { grid-area: right; font-size: 20px; }
+.dpad-down     { grid-area: down; }
+.dpad-strafe-l { grid-area: strafe-l; background: var(--accent-cyan); border-color: var(--accent-cyan); color: #fff; font-size: 16px; }
+.dpad-strafe-l:hover { background: #0891b2; }
+.dpad-strafe-r { grid-area: strafe-r; background: var(--accent-cyan); border-color: var(--accent-cyan); color: #fff; font-size: 16px; }
+.dpad-strafe-r:hover { background: #0891b2; }
+
+.kb-hint {
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-top: 6px;
+  letter-spacing: 0.3px;
+}
+
+/* ---------- Virtual Joystick ---------- */
+.joystick-section {
+  padding: 8px 14px;
+  text-align: center;
+}
+
+.joystick-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.joystick-pad {
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  background: var(--bg-input);
+  border: 2px solid var(--border);
+  margin: 0 auto;
+  position: relative;
+  touch-action: none;
+  cursor: grab;
+}
+
+.joystick-pad:active { cursor: grabbing; }
+
+.joystick-ring {
+  position: absolute;
+  inset: 15px;
+  border-radius: 50%;
+  border: 1px dashed rgba(255,255,255,0.1);
+}
+
+.joystick-knob {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  border: 2px solid #fff;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  margin: -20px 0 0 -20px;
+  transition: transform 0.05s;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
 
 /* ---------- Sport Mode Buttons ---------- */
+.sport-mode-section {
+  padding: 4px 6px 8px;
+}
+
 .sport-mode-row {
   display: flex;
-  gap: 6px;
-  margin-top: 10px;
-  padding: 0 4px;
+  gap: 4px;
 }
 
 .btn-sport {
@@ -392,7 +466,7 @@ select.input-sm { cursor: pointer; }
   padding: 8px 4px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--card-bg);
+  background: var(--bg-input);
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 600;
@@ -402,13 +476,15 @@ select.input-sm { cursor: pointer; }
 
 .btn-sport:hover { background: #3a3f4b; color: var(--text-primary); border-color: var(--accent-blue); }
 .btn-sport:active { background: var(--accent-blue); color: #fff; }
+.btn-sport.btn-sport-green { border-color: var(--accent-green); color: var(--accent-green); }
+.btn-sport.btn-sport-green:hover { background: var(--accent-green); color: #fff; }
 .btn-sport.btn-recovery { border-color: var(--accent-orange); color: var(--accent-orange); }
 .btn-sport.btn-recovery:hover { background: var(--accent-orange); color: #fff; }
+.btn-sport.btn-sport-red { border-color: var(--accent-red); color: var(--accent-red); }
+.btn-sport.btn-sport-red:hover { background: var(--accent-red); color: #fff; }
 
 /* ---------- Nav2 Status Panel ---------- */
-.nav2-body {
-  padding: 8px 14px 10px;
-}
+.nav2-body { padding: 8px 14px 10px; }
 
 .nav2-row {
   display: flex;
@@ -418,30 +494,11 @@ select.input-sm { cursor: pointer; }
   font-size: 12px;
 }
 
-.nav2-label {
-  color: var(--text-secondary);
-  font-weight: 600;
-}
-
-.nav2-value {
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.nav2-value.active {
-  color: var(--accent-green);
-  font-weight: 600;
-}
-
-.nav2-value.mono {
-  font-family: 'Courier New', monospace;
-  color: var(--text-primary);
-}
-
-.nav2-divider {
-  border-top: 1px solid var(--border);
-  margin: 6px 0;
-}
+.nav2-label { color: var(--text-secondary); font-weight: 600; }
+.nav2-value { color: var(--text-secondary); font-size: 12px; }
+.nav2-value.active { color: var(--accent-green); font-weight: 600; }
+.nav2-value.mono { font-family: 'Courier New', monospace; color: var(--text-primary); }
+.nav2-divider { border-top: 1px solid var(--border); margin: 6px 0; }
 
 /* ---------- Map ---------- */
 .card-map { height: 100%; display: flex; flex-direction: column; }
@@ -532,7 +589,7 @@ select.input-sm { cursor: pointer; }
   border-radius: 4px;
 }
 
-/* ROS Nodes Bar (below map, like KraiPlatform) */
+/* ROS Nodes Bar */
 #ros-nodes-bar {
   display: flex;
   flex-wrap: wrap;
@@ -544,11 +601,7 @@ select.input-sm { cursor: pointer; }
   color: var(--text-secondary);
 }
 
-.ros-node-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
+.ros-node-item { display: flex; align-items: center; gap: 4px; }
 
 .rn-dot {
   width: 8px;
@@ -558,14 +611,9 @@ select.input-sm { cursor: pointer; }
   display: inline-block;
 }
 
-.ros-node-item.active .rn-dot {
-  background: var(--accent-green);
-}
+.ros-node-item.active .rn-dot { background: var(--accent-green); }
 
-.map-toolbar {
-  display: flex;
-  gap: 4px;
-}
+.map-toolbar { display: flex; gap: 4px; }
 
 /* ---------- Icon Buttons ---------- */
 .btn-icon {
@@ -588,24 +636,11 @@ select.input-sm { cursor: pointer; }
 .btn-icon.btn-red   { color: var(--accent-red); }
 
 /* ---------- Waypoints ---------- */
-.card-waypoints {
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100% - 80px);
-}
-
+.card-waypoints { display: flex; flex-direction: column; max-height: calc(100% - 80px); }
 .wp-toolbar { display: flex; gap: 4px; }
+.wp-table-wrap { overflow-y: auto; flex: 1; }
 
-.wp-table-wrap {
-  overflow-y: auto;
-  flex: 1;
-}
-
-#waypoint-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
+#waypoint-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 
 #waypoint-table th {
   position: sticky;
@@ -656,23 +691,58 @@ select.input-sm { cursor: pointer; }
 }
 .estop-flash { animation: estop-flash 0.3s ease 3; }
 
-/* ---------- Vision / Camera Tab ---------- */
-.vision-container {
-  padding: 10px;
-  height: 100%;
+/* ---------- Toggle Switch ---------- */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 22px;
 }
 
-.card-camera {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
+.switch input { opacity: 0; width: 0; height: 0; }
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--bg-input);
+  border-radius: 22px;
+  transition: .3s;
 }
 
-.camera-toolbar {
+.slider::before {
+  content: "";
+  position: absolute;
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  bottom: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: .3s;
+}
+
+.switch input:checked + .slider { background: var(--accent-cyan); }
+.switch input:checked + .slider::before { transform: translateX(22px); }
+
+.toggle-row {
   display: flex;
-  gap: 8px;
   align-items: center;
+  gap: 10px;
+  padding: 4px 0;
 }
+
+.toggle-label-left, .toggle-label-right {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ---------- Vision / Camera Tab ---------- */
+.vision-container { padding: 10px; height: 100%; }
+
+.card-camera { height: 100%; display: flex; flex-direction: column; }
+
+.camera-toolbar { display: flex; gap: 8px; align-items: center; }
 
 .camera-toolbar select {
   background: var(--bg-input);
@@ -692,10 +762,7 @@ select.input-sm { cursor: pointer; }
   justify-content: center;
 }
 
-#camera-canvas {
-  max-width: 100%;
-  max-height: 100%;
-}
+#camera-canvas { max-width: 100%; max-height: 100%; }
 
 #camera-placeholder {
   text-align: center;
@@ -706,17 +773,11 @@ select.input-sm { cursor: pointer; }
 #camera-canvas.hidden { display: none; }
 
 /* ---------- Settings Tab ---------- */
-.settings-container {
-  padding: 10px;
-  max-width: 500px;
-}
-
+.settings-container { padding: 10px; max-width: 500px; }
 .settings-wide { max-width: 600px; }
 
 /* ---------- Launch Manager ---------- */
-.card-launch-manager {
-  border-color: var(--accent-blue);
-}
+.card-launch-manager { border-color: var(--accent-blue); }
 
 .lm-desc {
   padding: 8px 14px 4px;
@@ -743,11 +804,7 @@ select.input-sm { cursor: pointer; }
 .lm-indicator.running { background: var(--accent-green); }
 
 .lm-info { flex: 1; }
-
-.lm-name {
-  font-weight: 600;
-  font-size: 13px;
-}
+.lm-name { font-weight: 600; font-size: 13px; }
 
 .lm-status-text {
   font-size: 11px;
@@ -755,44 +812,13 @@ select.input-sm { cursor: pointer; }
   font-family: 'Courier New', monospace;
 }
 
-.lm-sub-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px 6px 36px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  border-bottom: 1px solid var(--border);
-}
-
-.lm-sub-row label { min-width: 80px; font-weight: 600; }
-
-.lm-sub-row input,
-.lm-sub-row select {
-  flex: 1;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  color: var(--text-primary);
-  padding: 6px 8px;
-  border-radius: 6px;
-  font-size: 12px;
-}
-
-.lm-save-row {
-  gap: 6px;
-}
-
-.lm-save-row input { max-width: 160px; }
-
 .btn-stop-proc {
   background: var(--accent-red) !important;
   border-color: var(--accent-red) !important;
   color: #fff !important;
 }
 
-.btn-stop-proc:hover {
-  background: #dc2626 !important;
-}
+.btn-stop-proc:hover { background: #dc2626 !important; }
 
 .form-group {
   padding: 8px 14px;
@@ -830,10 +856,7 @@ select.input-sm { cursor: pointer; }
   font-size: 11px;
 }
 
-.status-nodes {
-  display: flex;
-  gap: 16px;
-}
+.status-nodes { display: flex; gap: 16px; }
 
 .node-status {
   display: flex;
@@ -862,9 +885,7 @@ select.input-sm { cursor: pointer; }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 1100px) {
-  .panel-grid {
-    grid-template-columns: 240px 1fr 240px;
-  }
+  .panel-grid { grid-template-columns: 260px 1fr 240px; }
 }
 
 @media (max-width: 860px) {
@@ -873,4 +894,6 @@ select.input-sm { cursor: pointer; }
     grid-template-rows: auto;
   }
   .col-center { min-height: 400px; }
+  .joystick-pad { width: 160px; height: 160px; }
+  .joystick-knob { width: 48px; height: 48px; margin: -24px 0 0 -24px; }
 }

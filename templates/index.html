@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Unitree Go2 Web Control</title>
+  <title>Unitree Go2 Web Teleop</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
   <!-- roslibjs – direct WebSocket connection to rosbridge -->
   <script src="https://cdn.jsdelivr.net/npm/eventemitter2@6.4.9/lib/eventemitter2.min.js"></script>
@@ -13,8 +13,8 @@
   <!-- ====== TOP NAV BAR ====== -->
   <nav id="top-nav">
     <div class="nav-brand">
-      <span class="brand-icon">&#9881;</span>
-      <span class="brand-text">Unitree Go2</span>
+      <span class="brand-icon">&#128054;</span>
+      <span class="brand-text">Go2 Teleop</span>
     </div>
     <ul class="nav-tabs">
       <li class="active" data-tab="mobile">Mobile</li>
@@ -22,6 +22,7 @@
       <li data-tab="settings">Settings</li>
     </ul>
     <div class="nav-right">
+      <span id="gamepad-indicator" class="gamepad-badge">Gamepad: None</span>
       <span id="ros-connection-badge" class="badge badge-disconnected">ROS Disconnected</span>
     </div>
   </nav>
@@ -104,7 +105,37 @@
             </div>
           </div>
 
-          <!-- Navigation 2 Status (like RViz Navigation 2 panel) -->
+          <!-- Go2 Robot Status -->
+          <div class="card card-go2-status" id="go2-status-card">
+            <div class="card-header"><h3>Go2 Status</h3></div>
+            <div class="go2-status-body">
+              <div class="go2-status-row">
+                <span class="go2-label">Mode:</span>
+                <span class="go2-value" id="go2-mode">--</span>
+              </div>
+              <div class="go2-status-row">
+                <span class="go2-label">Gait:</span>
+                <span class="go2-value" id="go2-gait">--</span>
+              </div>
+              <div class="go2-status-row">
+                <span class="go2-label">Battery:</span>
+                <span class="go2-value" id="go2-battery">
+                  <span class="battery-bar"><span class="battery-fill" id="go2-battery-fill" style="width:0%"></span></span>
+                  <span id="go2-battery-pct">--%</span>
+                </span>
+              </div>
+              <div class="go2-status-row">
+                <span class="go2-label">Velocity:</span>
+                <span class="go2-value mono" id="vel-display">Stopped</span>
+              </div>
+              <div class="go2-status-row">
+                <span class="go2-label">Teleop via:</span>
+                <span id="teleop-mode-label" class="teleop-mode-label mode-rosbridge">ROS Bridge (direct)</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Navigation 2 Status -->
           <div class="card card-nav2-status" id="nav2-status-card">
             <div class="card-header"><h3>Navigation 2</h3></div>
             <div class="nav2-body">
@@ -126,11 +157,11 @@
                 <span class="nav2-value mono" id="nav2-eta">--</span>
               </div>
               <div class="nav2-row">
-                <span class="nav2-label">Distance remaining:</span>
+                <span class="nav2-label">Distance:</span>
                 <span class="nav2-value mono" id="nav2-distance">--</span>
               </div>
               <div class="nav2-row">
-                <span class="nav2-label">Time taken:</span>
+                <span class="nav2-label">Time:</span>
                 <span class="nav2-value mono" id="nav2-time">--</span>
               </div>
               <div class="nav2-row">
@@ -140,37 +171,57 @@
             </div>
           </div>
 
-          <!-- Teleop D-pad -->
+          <!-- Teleop Controls -->
           <div class="card card-controls">
             <div class="card-header"><h3>Teleop</h3></div>
+
+            <!-- Speed sliders -->
             <div class="speed-control">
-              <label>Linear Speed</label>
+              <label>Linear</label>
               <input type="range" id="linear-speed" min="0.01" max="1.5" step="0.01" value="0.3" />
               <span id="linear-speed-val">0.30</span> m/s
             </div>
             <div class="speed-control">
-              <label>Angular Speed</label>
+              <label>Angular</label>
               <input type="range" id="angular-speed" min="0.1" max="3.0" step="0.1" value="0.8" />
               <span id="angular-speed-val">0.80</span> rad/s
             </div>
-            <div class="dpad">
-              <button class="dpad-btn dpad-up" id="btn-forward" title="Forward">&#9650;</button>
-              <button class="dpad-btn dpad-left" id="btn-left" title="Turn Left">&#9664;</button>
+
+            <!-- D-pad with strafe (8-direction) -->
+            <div class="dpad-8dir">
+              <button class="dpad-btn dpad-up" id="btn-forward" title="Forward (W)">&#9650;</button>
+              <button class="dpad-btn dpad-left" id="btn-left" title="Turn Left (A)">&#8630;</button>
               <button class="dpad-btn dpad-center" id="btn-stop" title="Stop">STOP</button>
-              <button class="dpad-btn dpad-right" id="btn-right" title="Turn Right">&#9654;</button>
-              <button class="dpad-btn dpad-down" id="btn-backward" title="Backward">&#9660;</button>
+              <button class="dpad-btn dpad-right" id="btn-right" title="Turn Right (D)">&#8631;</button>
+              <button class="dpad-btn dpad-down" id="btn-backward" title="Backward (S)">&#9660;</button>
+              <button class="dpad-btn dpad-strafe-l" id="btn-strafe-left" title="Strafe Left (Q)">&#9664;</button>
+              <button class="dpad-btn dpad-strafe-r" id="btn-strafe-right" title="Strafe Right (E)">&#9654;</button>
             </div>
-            <!-- Unitree Go2 Sport Mode -->
-            <div class="sport-mode-row">
-              <button class="btn-sport" id="btn-stand-up" title="Stand Up">Stand Up</button>
-              <button class="btn-sport" id="btn-stand-down" title="Lie Down">Lie Down</button>
-              <button class="btn-sport btn-recovery" id="btn-recovery-stand" title="Recovery Stand">Recovery</button>
-              <button class="btn-sport" id="btn-damp" title="Damp (soft stop motors)">Damp</button>
+
+            <div class="kb-hint">WASD: Move &nbsp; QE: Strafe &nbsp; Space: E-Stop</div>
+
+            <!-- Virtual Joystick -->
+            <div class="joystick-section">
+              <div class="joystick-label">Analog Joystick</div>
+              <div class="joystick-pad" id="joystick-pad">
+                <div class="joystick-ring"></div>
+                <div class="joystick-knob" id="joystick-knob"></div>
+              </div>
+            </div>
+
+            <!-- Unitree Go2 Sport Mode Buttons -->
+            <div class="sport-mode-section">
+              <div class="sport-mode-row">
+                <button class="btn-sport btn-sport-green" id="btn-stand-up" title="Stand Up">Stand Up</button>
+                <button class="btn-sport" id="btn-stand-down" title="Lie Down">Lie Down</button>
+                <button class="btn-sport btn-recovery" id="btn-recovery-stand" title="Recovery Stand">Recovery</button>
+                <button class="btn-sport btn-sport-red" id="btn-damp" title="Damp (soft stop)">Damp</button>
+              </div>
             </div>
           </div>
         </div>
 
-        <!-- CENTER COLUMN – Map Viewer -->
+        <!-- CENTER COLUMN - Map Viewer -->
         <div class="col-center">
           <div class="card card-map">
             <div class="card-header">
@@ -190,11 +241,11 @@
                 <div class="legend-title">Layers</div>
                 <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="map" checked /><span class="dot" style="background:#d2d2d2"></span> Map</label>
                 <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="robot" checked /><span class="dot dot-green"></span> Robot</label>
-                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="laser" checked /><span class="dot" style="background:#00ffff"></span> LiDAR Scan</label>
-                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="odom" checked /><span class="dot dot-orange"></span> Odom Trail</label>
-                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="path" checked /><span class="dot" style="background:#00c850"></span> Nav Path</label>
+                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="laser" checked /><span class="dot" style="background:#00ffff"></span> LiDAR</label>
+                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="odom" checked /><span class="dot dot-orange"></span> Trail</label>
+                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="path" checked /><span class="dot" style="background:#00c850"></span> Path</label>
                 <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="costmap" checked /><span class="dot dot-purple"></span> Costmap</label>
-                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="tf" checked /><span class="dot" style="background:#ff3333"></span> TF Frames</label>
+                <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="tf" checked /><span class="dot" style="background:#ff3333"></span> TF</label>
                 <label class="legend-item"><input type="checkbox" class="layer-toggle" data-layer="grid" checked /><span class="dot" style="background:#666"></span> Grid</label>
               </div>
               <div id="map-status">
@@ -203,7 +254,7 @@
                 <span id="map-cursor-pos">X: -- Y: --</span>
               </div>
             </div>
-            <!-- ROS Node Status (like KraiPlatform reference) -->
+            <!-- ROS Node Status -->
             <div id="ros-nodes-bar">
               <span class="ros-node-item" id="rn-rosbridge"><span class="rn-dot"></span>/rosbridge</span>
               <span class="ros-node-item" id="rn-turtlebot"><span class="rn-dot"></span>/go2</span>
@@ -215,7 +266,7 @@
           </div>
         </div>
 
-        <!-- RIGHT COLUMN – Waypoints -->
+        <!-- RIGHT COLUMN - Waypoints -->
         <div class="col-right">
           <div class="card card-waypoints">
             <div class="card-header">
@@ -229,17 +280,9 @@
             <div class="wp-table-wrap">
               <table id="waypoint-table">
                 <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Pos X</th>
-                    <th>Pos Y</th>
-                    <th>Ori Z</th>
-                    <th>Ori W</th>
-                  </tr>
+                  <tr><th>#</th><th>Pos X</th><th>Pos Y</th><th>Ori Z</th><th>Ori W</th></tr>
                 </thead>
-                <tbody id="waypoint-body">
-                  <!-- rows inserted by JS -->
-                </tbody>
+                <tbody id="waypoint-body"></tbody>
               </table>
             </div>
           </div>
@@ -265,6 +308,7 @@
                 <option value="/camera/image_raw">/camera/image_raw</option>
                 <option value="/camera/image_raw/compressed">/camera/image_raw/compressed</option>
                 <option value="/go2_camera/color/image">/go2_camera/color/image</option>
+                <option value="/go2_camera/color/image/compressed">/go2_camera/color/image/compressed</option>
                 <option value="/image_raw">/image_raw</option>
               </select>
               <button id="btn-camera-toggle" class="btn-action btn-primary">Start Stream</button>
@@ -286,42 +330,29 @@
     <section id="tab-settings" class="tab-panel">
       <div class="settings-container settings-wide">
 
-        <!-- ======= PROCESS STATUS ======= -->
+        <!-- Process Status -->
         <div class="card card-launch-manager">
           <div class="card-header"><h3>Process Status</h3></div>
           <p class="lm-desc">All processes are controlled from the Mobile tab.</p>
-
           <div class="lm-row" id="lm-rosbridge">
             <div class="lm-indicator stopped"></div>
-            <div class="lm-info">
-              <div class="lm-name">ROS Bridge</div>
-              <div class="lm-status-text">Stopped</div>
-            </div>
+            <div class="lm-info"><div class="lm-name">ROS Bridge</div><div class="lm-status-text">Stopped</div></div>
           </div>
           <div class="lm-row" id="lm-bringup">
             <div class="lm-indicator stopped"></div>
-            <div class="lm-info">
-              <div class="lm-name">Robot Bringup</div>
-              <div class="lm-status-text">Stopped</div>
-            </div>
+            <div class="lm-info"><div class="lm-name">Robot Bringup</div><div class="lm-status-text">Stopped</div></div>
           </div>
           <div class="lm-row" id="lm-slam">
             <div class="lm-indicator stopped"></div>
-            <div class="lm-info">
-              <div class="lm-name">SLAM</div>
-              <div class="lm-status-text">Stopped</div>
-            </div>
+            <div class="lm-info"><div class="lm-name">SLAM</div><div class="lm-status-text">Stopped</div></div>
           </div>
           <div class="lm-row" id="lm-navigation">
             <div class="lm-indicator stopped"></div>
-            <div class="lm-info">
-              <div class="lm-name">Navigation</div>
-              <div class="lm-status-text">Stopped</div>
-            </div>
+            <div class="lm-info"><div class="lm-name">Navigation</div><div class="lm-status-text">Stopped</div></div>
           </div>
         </div>
 
-        <!-- ======= CONNECTION SETTINGS ======= -->
+        <!-- Connection Settings -->
         <div class="card">
           <div class="card-header"><h3>Connection Settings</h3></div>
           <div class="form-group">
@@ -335,24 +366,40 @@
           <button id="btn-reconnect" class="btn-action btn-primary">Reconnect</button>
         </div>
 
-        <!-- ======= ROS2 NETWORK ======= -->
+        <!-- Teleop Settings -->
+        <div class="card">
+          <div class="card-header"><h3>Teleop Settings</h3></div>
+          <div class="form-group">
+            <label>Teleop Mode</label>
+            <div class="toggle-row">
+              <span class="toggle-label-left">HTTP Relay (SSH)</span>
+              <label class="switch">
+                <input type="checkbox" id="teleop-mode-toggle" checked />
+                <span class="slider"></span>
+              </label>
+              <span class="toggle-label-right">ROS Bridge (direct)</span>
+            </div>
+            <small style="color:#888;">ROS Bridge mode publishes /cmd_vel directly via WebSocket for lowest latency</small>
+          </div>
+        </div>
+
+        <!-- ROS2 Network -->
         <div class="card">
           <div class="card-header"><h3>ROS2 Network</h3></div>
           <div class="form-group">
             <label>RMW Implementation</label>
             <input type="text" value="rmw_cyclonedds_cpp" disabled />
-            <small style="color:#888;">CycloneDDS via eth0 (matches Go2 Jetson config)</small>
+            <small style="color:#888;">CycloneDDS via eth0 (Go2 Jetson)</small>
           </div>
           <div class="form-group">
-            <label>ROS_DOMAIN_ID (must match robot)</label>
+            <label>ROS_DOMAIN_ID</label>
             <input type="number" id="setting-domain-id" value="{{ ros_domain_id|default('') }}" disabled />
-            <small style="color:#888;">Set via ROS_DOMAIN_ID env var before starting server (empty = default)</small>
           </div>
           <button id="btn-check-topics" class="btn-action" style="margin-bottom:8px;">Check ROS2 Topics</button>
           <pre id="ros2-topics-output" style="display:none; max-height:150px; overflow:auto; font-size:11px; background:#1a1a2e; padding:8px; border-radius:4px; color:#ccc;"></pre>
         </div>
 
-        <!-- ======= ROBOT PARAMS ======= -->
+        <!-- Robot Parameters -->
         <div class="card">
           <div class="card-header"><h3>Robot Parameters</h3></div>
           <div class="form-group">
@@ -388,7 +435,6 @@
 
   <!-- ====== SCRIPTS ====== -->
   <script>
-    // Pass server config to JS
     window.APP_CONFIG = {
       rosbridgeHost: "{{ rosbridge_host }}",
       rosbridgePort: {{ rosbridge_port }},
