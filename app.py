@@ -539,10 +539,36 @@ def sport_command():
     if api_id is None:
         return jsonify({"ok": False, "error": "api_id required"}), 400
 
+    # Stop any ongoing movement before executing a stance command
+    _sport_move_stop()
+
     ok, detail = _sport_pub_once(api_id, parameter)
+    label = data.get("label", str(api_id))
+    print(f"[Sport] {label} (api_id={api_id}): {'OK' if ok else detail}")
     if ok:
         return jsonify({"ok": True, "api_id": api_id, "type": detail})
     return jsonify({"ok": False, "error": detail}), 500
+
+
+@app.route("/api/sport/move", methods=["POST"])
+def sport_move():
+    """Start/stop persistent velocity publishing for teleop.
+
+    POST { vx, vy, vyaw } — starts ros2 topic pub at 10Hz.
+    POST { vx:0, vy:0, vyaw:0 } — stops the publisher + sends StopMove.
+    """
+    data = request.get_json(force=True)
+    vx = float(data.get("vx", 0))
+    vy = float(data.get("vy", 0))
+    vyaw = float(data.get("vyaw", 0))
+
+    if vx == 0 and vy == 0 and vyaw == 0:
+        _sport_move_stop()
+        _sport_pub_once(1003, {})  # StopMove
+        return jsonify({"ok": True, "action": "stop"})
+    else:
+        _sport_move_start(vx, vy, vyaw)
+        return jsonify({"ok": True, "action": "move", "vx": vx, "vy": vy, "vyaw": vyaw})
 
 
 @app.route("/api/sport/topic_type")
@@ -553,7 +579,7 @@ def sport_topic_type():
 
 
 # ---------------------------------------------------------------------------
-# SocketIO events
+# SocketIO events (thin relay – most comms go through roslibjs directly)
 # ---------------------------------------------------------------------------
 
 @socketio.on("connect")
@@ -565,40 +591,6 @@ def handle_connect():
 def handle_disconnect():
     _sport_move_stop()
     print("[WebUI] Client disconnected")
-
-
-@socketio.on("sport_move")
-def handle_sport_move(data):
-    """Handle velocity commands from the browser for teleop.
-
-    data: { vx: float, vy: float, vyaw: float }
-    Starts a persistent 10Hz publisher with the given velocity.
-    Send {vx:0, vy:0, vyaw:0} to stop.
-    """
-    vx = float(data.get("vx", 0))
-    vy = float(data.get("vy", 0))
-    vyaw = float(data.get("vyaw", 0))
-
-    if vx == 0 and vy == 0 and vyaw == 0:
-        _sport_move_stop()
-        # Also send a single StopMove command
-        _sport_pub_once(1003, {})
-    else:
-        _sport_move_start(vx, vy, vyaw)
-
-
-@socketio.on("sport_cmd")
-def handle_sport_cmd(data):
-    """Handle one-shot sport commands (stand, lie down, etc.) via SocketIO.
-
-    data: { api_id: int, label: str }
-    """
-    api_id = int(data.get("api_id", 0))
-    if api_id:
-        _sport_move_stop()  # stop any movement first
-        ok, detail = _sport_pub_once(api_id, {})
-        label = data.get("label", str(api_id))
-        print(f"[Sport] {label} (api_id={api_id}): {'OK' if ok else detail}")
 
 
 # ---------------------------------------------------------------------------
