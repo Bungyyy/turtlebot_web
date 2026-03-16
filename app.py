@@ -411,7 +411,149 @@ def camera_feed():
 
 
 # ---------------------------------------------------------------------------
-# SocketIO events (thin relay – most comms go through roslibjs directly)
+# Unitree Go2 Sport API – sends commands via ros2 topic pub
+# ---------------------------------------------------------------------------
+
+_sport_msg_type = None          # cached message type
+_sport_move_proc = None         # persistent ros2 topic pub process for velocity
+_sport_move_lock = threading.Lock()
+
+
+def _resolve_sport_type():
+    """Discover the message type of /api/sport/request via ros2 topic info."""
+    global _sport_msg_type
+    if _sport_msg_type:
+        return _sport_msg_type
+    try:
+        result = subprocess.run(
+            ["ros2", "topic", "info", "/api/sport/request", "-t"],
+            capture_output=True, text=True, timeout=5,
+            env=_build_env(),
+        )
+        for line in result.stdout.splitlines():
+            if "Type:" in line:
+                _sport_msg_type = line.split("Type:")[-1].strip()
+                print(f"[Sport] Resolved topic type: {_sport_msg_type}")
+                return _sport_msg_type
+    except Exception as e:
+        print(f"[Sport] Could not resolve topic type: {e}")
+    return None
+
+
+def _sport_yaml(api_id, params):
+    """Build YAML message string for ros2 topic pub."""
+    import json
+    param_str = json.dumps(params) if isinstance(params, dict) else str(params)
+    return (
+        "{"
+        f"header: {{stamp: {{sec: 0, nanosec: 0}}, frame_id: ''}}, "
+        f"parameter: '{param_str}', "
+        f"api_id: {api_id}"
+        "}"
+    )
+
+
+def _sport_pub_once(api_id, params):
+    """Publish a single sport command via ros2 topic pub --once."""
+    msg_type = _resolve_sport_type()
+    if not msg_type:
+        return False, "Cannot resolve /api/sport/request type"
+    yaml_msg = _sport_yaml(api_id, params)
+    try:
+        result = subprocess.run(
+            ["ros2", "topic", "pub", "--once",
+             "/api/sport/request", msg_type, yaml_msg],
+            capture_output=True, text=True, timeout=5,
+            env=_build_env(),
+        )
+        if result.returncode == 0:
+            return True, msg_type
+        return False, result.stderr.strip() or result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        return False, "timeout"
+    except Exception as e:
+        return False, str(e)
+
+
+def _sport_move_start(vx, vy, vyaw):
+    """Start a persistent ros2 topic pub for velocity at 10Hz.
+
+    Kills any existing velocity publisher and starts a new one.
+    """
+    global _sport_move_proc
+    msg_type = _resolve_sport_type()
+    if not msg_type:
+        return
+
+    yaml_msg = _sport_yaml(1008, {"x": vx, "y": vy, "rx": vyaw})
+
+    with _sport_move_lock:
+        # Kill existing velocity publisher
+        if _sport_move_proc and _sport_move_proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(_sport_move_proc.pid), signal.SIGTERM)
+                _sport_move_proc.wait(timeout=1)
+            except Exception:
+                try:
+                    os.killpg(os.getpgid(_sport_move_proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+            _sport_move_proc = None
+
+        # Start new publisher at 10Hz
+        try:
+            _sport_move_proc = subprocess.Popen(
+                ["ros2", "topic", "pub", "--rate", "10",
+                 "/api/sport/request", msg_type, yaml_msg],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid,
+                env=_build_env(),
+            )
+        except Exception as e:
+            print(f"[Sport] Move start failed: {e}")
+
+
+def _sport_move_stop():
+    """Stop the persistent velocity publisher."""
+    global _sport_move_proc
+    with _sport_move_lock:
+        if _sport_move_proc and _sport_move_proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(_sport_move_proc.pid), signal.SIGTERM)
+                _sport_move_proc.wait(timeout=1)
+            except Exception:
+                try:
+                    os.killpg(os.getpgid(_sport_move_proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+        _sport_move_proc = None
+
+
+@app.route("/api/sport", methods=["POST"])
+def sport_command():
+    """Send a one-shot sport mode command to the Go2."""
+    data = request.get_json(force=True)
+    api_id = data.get("api_id")
+    parameter = data.get("parameter", {})
+
+    if api_id is None:
+        return jsonify({"ok": False, "error": "api_id required"}), 400
+
+    ok, detail = _sport_pub_once(api_id, parameter)
+    if ok:
+        return jsonify({"ok": True, "api_id": api_id, "type": detail})
+    return jsonify({"ok": False, "error": detail}), 500
+
+
+@app.route("/api/sport/topic_type")
+def sport_topic_type():
+    """Return the resolved message type for /api/sport/request."""
+    msg_type = _resolve_sport_type()
+    return jsonify({"ok": bool(msg_type), "type": msg_type})
+
+
+# ---------------------------------------------------------------------------
+# SocketIO events
 # ---------------------------------------------------------------------------
 
 @socketio.on("connect")
@@ -421,7 +563,42 @@ def handle_connect():
 
 @socketio.on("disconnect")
 def handle_disconnect():
+    _sport_move_stop()
     print("[WebUI] Client disconnected")
+
+
+@socketio.on("sport_move")
+def handle_sport_move(data):
+    """Handle velocity commands from the browser for teleop.
+
+    data: { vx: float, vy: float, vyaw: float }
+    Starts a persistent 10Hz publisher with the given velocity.
+    Send {vx:0, vy:0, vyaw:0} to stop.
+    """
+    vx = float(data.get("vx", 0))
+    vy = float(data.get("vy", 0))
+    vyaw = float(data.get("vyaw", 0))
+
+    if vx == 0 and vy == 0 and vyaw == 0:
+        _sport_move_stop()
+        # Also send a single StopMove command
+        _sport_pub_once(1003, {})
+    else:
+        _sport_move_start(vx, vy, vyaw)
+
+
+@socketio.on("sport_cmd")
+def handle_sport_cmd(data):
+    """Handle one-shot sport commands (stand, lie down, etc.) via SocketIO.
+
+    data: { api_id: int, label: str }
+    """
+    api_id = int(data.get("api_id", 0))
+    if api_id:
+        _sport_move_stop()  # stop any movement first
+        ok, detail = _sport_pub_once(api_id, {})
+        label = data.get("label", str(api_id))
+        print(f"[Sport] {label} (api_id={api_id}): {'OK' if ok else detail}")
 
 
 # ---------------------------------------------------------------------------
