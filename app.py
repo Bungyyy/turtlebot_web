@@ -532,20 +532,22 @@ def _sport_pub_once(api_id, params):
 
 
 def _sport_move_start(vx, vy, vyaw):
-    """Start a persistent velocity publisher on the Jetson at 10Hz."""
+    """Start a persistent velocity publisher on the Jetson at 10Hz via /cmd_vel."""
     global _sport_move_proc
-    msg_type = _resolve_sport_type()
-    if not msg_type:
-        return
 
-    yaml_msg = _sport_yaml(1008, {"x": vx, "y": vy, "rx": vyaw})
-    remote = f"ros2 topic pub --rate 10 /api/sport/request {msg_type} {yaml_msg}"
+    # Use standard geometry_msgs/msg/Twist on /cmd_vel — same as teleop_twist_keyboard.
+    # This works reliably with bringup.launch and avoids sport API DDS discovery issues.
+    yaml_msg = (
+        "'{linear: {x: " + str(vx) + ", y: " + str(vy) + ", z: 0.0}, "
+        "angular: {x: 0.0, y: 0.0, z: " + str(vyaw) + "}}'"
+    )
+    remote = f"ros2 topic pub --rate 10 /cmd_vel geometry_msgs/msg/Twist {yaml_msg}"
 
     with _sport_move_lock:
         _kill_sport_move_proc()
         try:
             _sport_move_proc = _ssh_popen(remote)
-            print(f"[Sport] Move started: vx={vx} vy={vy} vyaw={vyaw}")
+            print(f"[Sport] Move started via /cmd_vel: vx={vx} vy={vy} vyaw={vyaw}")
         except Exception as e:
             print(f"[Sport] Move start failed: {e}")
 
@@ -611,7 +613,12 @@ def sport_move():
 
     if vx == 0 and vy == 0 and vyaw == 0:
         _sport_move_stop()
-        _sport_pub_once(1003, {})  # StopMove
+        # Publish a single zero-velocity Twist to ensure the robot stops
+        _ssh_cmd(
+            "ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "
+            "'{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}'",
+            timeout=5,
+        )
         return jsonify({"ok": True, "action": "stop"})
     else:
         _sport_move_start(vx, vy, vyaw)
