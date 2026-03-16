@@ -31,6 +31,9 @@ const Controls = (() => {
   function init() {
     // Connect SocketIO for sport commands
     socket = io();
+    socket.on("connect", () => console.log("[Controls] SocketIO connected, id:", socket.id));
+    socket.on("connect_error", (err) => console.error("[Controls] SocketIO connect error:", err));
+    socket.on("disconnect", (reason) => console.warn("[Controls] SocketIO disconnected:", reason));
 
     // D-pad button events (mouse + touch)
     _bindBtn("btn-forward",  () => _setVel( _linSpeed(), 0, 0));
