@@ -481,15 +481,24 @@ def _resolve_sport_type():
 
 
 def _sport_yaml(api_id, params):
-    """Build YAML message string for ros2 topic pub."""
+    """Build YAML message string for ros2 topic pub.
+
+    unitree_api/msg/Request structure:
+      RequestHeader header
+        RequestIdentity identity (int64 id, int64 api_id)
+        RequestLease lease (int64 id)
+        RequestPolicy policy (int32 priority, bool noreply)
+      string parameter
+      uint8[] binary
+    """
     import json
     param_str = json.dumps(params) if isinstance(params, dict) else str(params)
+    # Use double quotes for the outer YAML to avoid SSH single-quote escaping issues
     return (
-        "'{{"
-        f"header: {{stamp: {{sec: 0, nanosec: 0}}, frame_id: \\'\\'}}, "
-        f"parameter: \\'{param_str}\\', "
-        f"api_id: {api_id}"
-        "}}'"
+        '"{header: {identity: {id: 0, api_id: ' + str(api_id) + '}, '
+        'lease: {id: 0}, policy: {priority: 0, noreply: false}}, '
+        "parameter: '" + param_str + "', "
+        'binary: []}"'
     )
 
 
