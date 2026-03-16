@@ -995,9 +995,10 @@ def sport_command():
         _sport_ssh_host = data["ssh_host"]
 
     _sport_move_stop()
-    # Stop relay velocity too (e.g., Damp should stop all motion)
-    with _teleop_relay_lock:
-        _send_vel_relay(0, 0, 0)
+    # Kill the relay entirely — its persistent DDS publisher on domain 30
+    # can interfere with the one-shot ros2 topic pub from SSH.
+    # The relay will be auto-restarted on the next /api/sport/move call.
+    _kill_relay()
 
     ok, detail = _sport_pub_once(api_id, parameter)
     label = data.get("label", str(api_id))
