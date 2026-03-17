@@ -23,6 +23,11 @@
     </ul>
     <div class="nav-right">
       <span id="gamepad-indicator" class="gamepad-badge">Gamepad: None</span>
+      {% if deploy_mode == "jetson" %}
+      <span class="badge" style="background:#2e7d32;color:#fff;font-size:11px;">Jetson</span>
+      {% else %}
+      <span class="badge" style="background:#5c6bc0;color:#fff;font-size:11px;">Remote</span>
+      {% endif %}
       <span id="ros-connection-badge" class="badge badge-disconnected">ROS Disconnected</span>
     </div>
   </nav>
@@ -44,11 +49,16 @@
               <span id="step1-badge" class="step-badge">Offline</span>
             </div>
             <div class="wf-body">
-              <div class="wf-row">
+              {% if deploy_mode == "jetson" %}
+              <div class="wf-row" style="background: #1a3a2a; border-radius: 6px; padding: 6px 10px; margin-bottom: 6px;">
+                <span style="color: #4caf50; font-size: 12px;">Running on Jetson (local mode — no SSH needed)</span>
+              </div>
+              {% endif %}
+              <div class="wf-row" id="ssh-host-row" {% if deploy_mode == "jetson" %}style="display:none"{% endif %}>
                 <label>SSH Host</label>
                 <input type="text" id="ssh-host" class="input-sm" placeholder="unitree@192.168.123.18" value="unitree@192.168.123.18" />
               </div>
-              <div class="wf-row">
+              <div class="wf-row" id="ssh-password-row" {% if deploy_mode == "jetson" %}style="display:none"{% endif %}>
                 <label>SSH Password</label>
                 <input type="password" id="ssh-password" class="input-sm" placeholder="password" value="123" />
               </div>
@@ -438,6 +448,7 @@
     window.APP_CONFIG = {
       rosbridgeHost: "{{ rosbridge_host }}",
       rosbridgePort: {{ rosbridge_port }},
+      deployMode: "{{ deploy_mode }}",
     };
   </script>
   <script src="{{ url_for('static', filename='js/ros_bridge.js') }}"></script>
