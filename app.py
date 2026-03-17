@@ -42,6 +42,10 @@ ROBOT_MODEL = os.environ.get("ROBOT_MODEL", "go2")
 MAP_SAVE_DIR = os.environ.get("MAP_SAVE_DIR", os.path.expanduser("~/maps"))
 SSH_PASSWORD = os.environ.get("SSH_PASSWORD", "123")  # Go2 default password
 
+# Deploy mode: "jetson" = Flask runs on Jetson (all commands local, no SSH needed)
+#              "remote" = Flask runs on a PC (commands sent via SSH to Jetson)
+DEPLOY_MODE = os.environ.get("DEPLOY_MODE", "jetson")
+
 # ---------------------------------------------------------------------------
 # Process Manager — launch / stop ROS2 processes from the web UI
 # ---------------------------------------------------------------------------
@@ -134,6 +138,10 @@ def _launch_process(name, extra_args=None, ssh_host=None, ssh_password=None):
 
     if extra_args:
         cmd.extend(extra_args)
+
+    # In jetson mode, ignore SSH and run locally
+    if DEPLOY_MODE == "jetson":
+        ssh_host = None
 
     # Wrap with SSH if a remote host is specified
     if ssh_host:
@@ -250,6 +258,7 @@ def index():
         rosbridge_port=ROSBRIDGE_PORT,
         robot_model=ROBOT_MODEL,
         ros_domain_id=ROS_DOMAIN_ID,
+        deploy_mode=DEPLOY_MODE,
     )
 
 
@@ -263,6 +272,7 @@ def config():
         "map_save_dir": MAP_SAVE_DIR,
         "ros_domain_id": ROS_DOMAIN_ID,
         "teleop_mode": "rosbridge_primary",
+        "deploy_mode": DEPLOY_MODE,
     })
 
 
@@ -819,6 +829,65 @@ _JETSON_ROS_SETUP = (
 )
 
 
+def _local_cmd(cmd_str, timeout=8):
+    """Run a ROS2 command locally. Returns (returncode, stdout, stderr)."""
+    setup_cmd = (
+        "source /opt/ros/humble/setup.bash 2>/dev/null "
+        "|| source /opt/ros/iron/setup.bash 2>/dev/null "
+        "|| source /opt/ros/jazzy/setup.bash 2>/dev/null "
+        "|| true; "
+        "source ~/go2_ws/install/setup.bash 2>/dev/null || true; "
+        + (f"export RMW_IMPLEMENTATION={RMW_IMPLEMENTATION}; " if RMW_IMPLEMENTATION else "")
+        + (f"export ROS_DOMAIN_ID={GO2_DOMAIN_ID}; " if GO2_DOMAIN_ID else "")
+        + cmd_str
+    )
+    try:
+        result = subprocess.run(
+            ["bash", "-c", setup_cmd],
+            capture_output=True, text=True, timeout=timeout,
+            env=_build_env(),
+        )
+        return result.returncode, result.stdout.strip(), result.stderr.strip()
+    except subprocess.TimeoutExpired:
+        return -1, "", "timeout"
+    except Exception as e:
+        return -1, "", str(e)
+
+
+def _local_popen(cmd_str):
+    """Start a persistent local ROS2 command. Returns Popen."""
+    setup_cmd = (
+        "source /opt/ros/humble/setup.bash 2>/dev/null "
+        "|| source /opt/ros/iron/setup.bash 2>/dev/null "
+        "|| source /opt/ros/jazzy/setup.bash 2>/dev/null "
+        "|| true; "
+        "source ~/go2_ws/install/setup.bash 2>/dev/null || true; "
+        + (f"export RMW_IMPLEMENTATION={RMW_IMPLEMENTATION}; " if RMW_IMPLEMENTATION else "")
+        + (f"export ROS_DOMAIN_ID={GO2_DOMAIN_ID}; " if GO2_DOMAIN_ID else "")
+        + cmd_str
+    )
+    return subprocess.Popen(
+        ["bash", "-c", setup_cmd],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env=_build_env(),
+        preexec_fn=os.setsid,
+    )
+
+
+def _run_cmd(remote_cmd, timeout=8):
+    """Run a ROS2 command — locally in jetson mode, via SSH in remote mode."""
+    if DEPLOY_MODE == "jetson":
+        return _local_cmd(remote_cmd, timeout)
+    return _ssh_cmd(remote_cmd, timeout)
+
+
+def _run_popen(remote_cmd):
+    """Start a persistent ROS2 command — locally in jetson mode, via SSH in remote mode."""
+    if DEPLOY_MODE == "jetson":
+        return _local_popen(remote_cmd)
+    return _ssh_popen(remote_cmd)
+
+
 def _ssh_cmd(remote_cmd, timeout=8):
     """Run a command on the Jetson via SSH. Returns (returncode, stdout, stderr)."""
     # Use 'bash -i -c' to force interactive mode so that ~/.bashrc is sourced.
@@ -863,7 +932,7 @@ def _resolve_sport_type():
     global _sport_msg_type
     if _sport_msg_type:
         return _sport_msg_type
-    rc, stdout, stderr = _ssh_cmd("ros2 topic info /api/sport/request")
+    rc, stdout, stderr = _run_cmd("ros2 topic info /api/sport/request")
     for line in stdout.splitlines():
         if "Type:" in line:
             _sport_msg_type = line.split("Type:")[-1].strip()
@@ -917,8 +986,8 @@ def _sport_pub_once(api_id, params):
               f"timeout 5 ros2 topic pub --rate 10 "
               f"--qos-reliability best_effort "
               f"/api/sport/request {msg_type} {yaml_msg}")
-    print(f"[Sport] SSH cmd: {remote}")
-    rc, stdout, stderr = _ssh_cmd(remote, timeout=8)
+    print(f"[Sport] cmd ({DEPLOY_MODE}): {remote}")
+    rc, stdout, stderr = _run_cmd(remote, timeout=8)
     print(f"[Sport] rc={rc} stdout={stdout!r} stderr={stderr!r}")
     # 'timeout' returns 124 when it kills the child – that's expected/success
     if rc in (0, 124):
@@ -943,7 +1012,7 @@ def _sport_move_start(vx, vy, vyaw):
     with _sport_move_lock:
         _kill_sport_move_proc()
         try:
-            _sport_move_proc = _ssh_popen(remote)
+            _sport_move_proc = _run_popen(remote)
             print(f"[Sport] Move started via sport API: vx={vx} vy={vy} vyaw={vyaw}")
         except Exception as e:
             print(f"[Sport] Move start failed: {e}")
@@ -980,9 +1049,9 @@ def sport_command():
     if api_id is None:
         return jsonify({"ok": False, "error": "api_id required"}), 400
 
-    # Update SSH host from request if provided
+    # Update SSH host from request if provided (remote mode only)
     global _sport_ssh_host
-    if data.get("ssh_host"):
+    if DEPLOY_MODE != "jetson" and data.get("ssh_host"):
         _sport_ssh_host = data["ssh_host"]
 
     _sport_move_stop()
@@ -1011,9 +1080,9 @@ def sport_move():
     vy = float(data.get("vy", 0))
     vyaw = float(data.get("vyaw", 0))
 
-    # Update SSH host from request if provided
+    # Update SSH host from request if provided (remote mode only)
     global _sport_ssh_host
-    if data.get("ssh_host"):
+    if DEPLOY_MODE != "jetson" and data.get("ssh_host"):
         _sport_ssh_host = data["ssh_host"]
 
     is_moving = vx != 0 or vy != 0 or vyaw != 0
@@ -1065,6 +1134,7 @@ def teleop_status():
         "mode": _teleop_relay_mode,
         "ssh_host": _sport_ssh_host,
         "relay_host": _teleop_relay_host,
+        "deploy_mode": DEPLOY_MODE,
     })
 
 
@@ -1089,32 +1159,33 @@ def sport_debug():
         "checks": {},
     }
 
-    # 1. SSH connectivity
-    rc, stdout, stderr = _ssh_cmd("echo OK", timeout=5)
-    info["checks"]["ssh_connection"] = {
+    # 1. Connectivity check (SSH or local)
+    rc, stdout, stderr = _run_cmd("echo OK", timeout=5)
+    info["checks"]["connection"] = {
         "ok": rc == 0 and "OK" in stdout,
         "rc": rc, "stdout": stdout, "stderr": stderr,
+        "mode": DEPLOY_MODE,
     }
 
     if rc != 0:
         return jsonify(info)
 
-    # 2. Environment variables on the Jetson
-    rc, stdout, stderr = _ssh_cmd(
+    # 2. Environment variables
+    rc, stdout, stderr = _run_cmd(
         "echo RMW=$RMW_IMPLEMENTATION DOMAIN=$ROS_DOMAIN_ID "
         "CYCLONE=$CYCLONEDDS_URI FASTRTPS=$FASTRTPS_DEFAULT_PROFILES_FILE"
     )
     info["checks"]["env"] = {"output": stdout, "stderr": stderr}
 
     # 3. ROS2 daemon / node list
-    rc, stdout, stderr = _ssh_cmd("ros2 node list 2>&1", timeout=10)
+    rc, stdout, stderr = _run_cmd("ros2 node list 2>&1", timeout=10)
     info["checks"]["nodes"] = {
         "rc": rc, "output": stdout.splitlines() if stdout else [],
         "stderr": stderr,
     }
 
     # 4. ROS2 topic list
-    rc, stdout, stderr = _ssh_cmd("ros2 topic list 2>&1", timeout=10)
+    rc, stdout, stderr = _run_cmd("ros2 topic list 2>&1", timeout=10)
     topics = stdout.splitlines() if stdout else []
     info["checks"]["topics"] = {
         "rc": rc, "topics": topics, "stderr": stderr,
@@ -1124,11 +1195,11 @@ def sport_debug():
 
     # 5. /cmd_vel topic info (subscribers count)
     if "/cmd_vel" in topics:
-        rc, stdout, stderr = _ssh_cmd("ros2 topic info /cmd_vel -v 2>&1", timeout=10)
+        rc, stdout, stderr = _run_cmd("ros2 topic info /cmd_vel -v 2>&1", timeout=10)
         info["checks"]["cmd_vel_info"] = {"rc": rc, "output": stdout, "stderr": stderr}
 
     # 6. Test publish to /cmd_vel (zero velocity, safe)
-    rc, stdout, stderr = _ssh_cmd(
+    rc, stdout, stderr = _run_cmd(
         "timeout 3 ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "
         "'{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}'",
         timeout=8,
@@ -1152,7 +1223,7 @@ def sport_test_move():
     This directly tests whether the robot responds to /cmd_vel.
     Visit this URL and watch the robot — it should walk forward slowly.
     """
-    rc, stdout, stderr = _ssh_cmd(
+    rc, stdout, stderr = _run_cmd(
         "timeout 3 ros2 topic pub --rate 10 /cmd_vel geometry_msgs/msg/Twist "
         "'{linear: {x: 0.1, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}'",
         timeout=8,
@@ -1188,6 +1259,11 @@ atexit.register(_kill_relay)
 
 if __name__ == "__main__":
     print(f"[WebUI] Starting on http://0.0.0.0:{WEB_PORT}")
+    print(f"[WebUI] Deploy mode: {DEPLOY_MODE}")
+    if DEPLOY_MODE == "jetson":
+        print(f"[WebUI] Running on Jetson — all ROS2 commands execute locally (no SSH)")
+    else:
+        print(f"[WebUI] Running on remote PC — ROS2 commands sent via SSH to {_sport_ssh_host}")
     print(f"[WebUI] Expecting rosbridge at ws://{ROSBRIDGE_HOST}:{ROSBRIDGE_PORT}")
     print(f"[WebUI] Robot model: {ROBOT_MODEL}")
     print(f"[WebUI] Map save dir: {MAP_SAVE_DIR}")
