@@ -71,7 +71,7 @@ def _build_env():
     env["ROBOT_MODEL"] = ROBOT_MODEL
     env["RMW_IMPLEMENTATION"] = RMW_IMPLEMENTATION
     env["CYCLONEDDS_URI"] = CYCLONEDDS_URI
-    # Use GO2_DOMAIN_ID (default 30) — the Go2 robot communicates on this domain
+    # Use GO2_DOMAIN_ID if set, otherwise fall back to ROS_DOMAIN_ID
     domain_id = GO2_DOMAIN_ID or ROS_DOMAIN_ID
     if domain_id:
         env["ROS_DOMAIN_ID"] = domain_id
@@ -676,7 +676,6 @@ def _start_relay_local():
 
     # Build command that sources ROS2 setup and runs the relay
     # Try multiple ROS2 setup paths (humble, iron, jazzy)
-    # Use GO2_DOMAIN_ID (default 30) — the Go2 robot communicates on this domain
     _domain_id = GO2_DOMAIN_ID or ROS_DOMAIN_ID
     setup_cmd = (
         "source /opt/ros/humble/setup.bash 2>/dev/null "
@@ -715,6 +714,9 @@ def _start_relay_local():
     if _wait_for_ready(_teleop_relay_proc, timeout_sec=10):
         _teleop_relay_mode = "local"
         print("[Teleop] LOCAL relay started and ready!")
+        threading.Thread(
+            target=_read_relay_output, args=(_teleop_relay_proc,), daemon=True
+        ).start()
         return True
 
     # Failed — clean up
