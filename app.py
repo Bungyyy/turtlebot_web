@@ -55,6 +55,7 @@ _proc_lock = threading.Lock()
 
 ROS_DOMAIN_ID = os.environ.get("ROS_DOMAIN_ID", "")
 RMW_IMPLEMENTATION = os.environ.get("RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp")
+GO2_DOMAIN_ID = os.environ.get("GO2_DOMAIN_ID", "30")
 
 # CycloneDDS config – use eth0 on the Go2 (Jetson) network
 CYCLONEDDS_URI = os.environ.get("CYCLONEDDS_URI",
@@ -84,6 +85,9 @@ LAUNCH_COMMANDS = {
     "bringup": [
         "ros2", "launch", "go2_bringup", "bringup.launch",
     ],
+    "teleop": [
+        "ros2", "launch", "go2_teleop", "teleop.launch",
+    ],
     "slam": [
         "ros2", "launch", "fast_lio", "mapping.launch.py",
         "rviz:=false",
@@ -99,6 +103,7 @@ LAUNCH_COMMANDS = {
 # Map process names to executables that should be killed before re-launch
 _KILL_PATTERNS = {
     "rosbridge": ["rosbridge_websocket", "rosapi"],
+    "teleop": ["teleop_twist_keyboard"],
     "slam": ["fastlio_mapping", "fast_lio", "pointcloud_to_laserscan"],
     "navigation": ["bt_navigator", "controller_server", "planner_server",
                     "behavior_server", "lifecycle_manager_navigation"],
@@ -165,6 +170,23 @@ def _launch_process(name, extra_args=None, ssh_host=None, ssh_password=None):
         cmd = ["sshpass", "-p", password,
                "ssh", "-tt", "-o", "StrictHostKeyChecking=no",
                ssh_host, wrapped]
+    else:
+        # Local mode (jetson): wrap with bash to source ROS2 workspace
+        # so that go2_bringup, go2_teleop, etc. packages are found
+        local_cmd = " ".join(cmd)
+        wrapped = (
+            "source /opt/ros/humble/setup.bash 2>/dev/null "
+            "|| source /opt/ros/iron/setup.bash 2>/dev/null "
+            "|| source /opt/ros/jazzy/setup.bash 2>/dev/null "
+            "|| true; "
+            "source ~/go2_ws/install/setup.bash 2>/dev/null || true; "
+            "source ~/3d_ws/install/setup.bash 2>/dev/null || true; "
+            + (f"export RMW_IMPLEMENTATION={RMW_IMPLEMENTATION}; " if RMW_IMPLEMENTATION else "")
+            + (f"export CYCLONEDDS_URI='{CYCLONEDDS_URI}'; " if CYCLONEDDS_URI else "")
+            + (f"export ROS_DOMAIN_ID={GO2_DOMAIN_ID}; " if GO2_DOMAIN_ID else "")
+            + local_cmd
+        )
+        cmd = ["bash", "-c", wrapped]
 
     try:
         env = _build_env()
@@ -820,7 +842,6 @@ def _kill_relay():
 # ROS2 env setup to source on the Jetson via SSH.
 # Go2 uses ROS_DOMAIN_ID=30. We must set it AFTER sourcing setup.bash
 # because setup.bash can reset environment variables.
-GO2_DOMAIN_ID = os.environ.get("GO2_DOMAIN_ID", "30")
 _JETSON_ROS_SETUP = (
     "source /opt/ros/humble/setup.bash 2>/dev/null || true; "
     "source ~/go2_ws/install/setup.bash 2>/dev/null; "
