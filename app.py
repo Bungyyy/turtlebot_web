@@ -71,8 +71,10 @@ def _build_env():
     env["ROBOT_MODEL"] = ROBOT_MODEL
     env["RMW_IMPLEMENTATION"] = RMW_IMPLEMENTATION
     env["CYCLONEDDS_URI"] = CYCLONEDDS_URI
-    if ROS_DOMAIN_ID:
-        env["ROS_DOMAIN_ID"] = ROS_DOMAIN_ID
+    # Use GO2_DOMAIN_ID (default 30) — the Go2 robot communicates on this domain
+    domain_id = GO2_DOMAIN_ID or ROS_DOMAIN_ID
+    if domain_id:
+        env["ROS_DOMAIN_ID"] = domain_id
     return env
 
 
@@ -674,6 +676,8 @@ def _start_relay_local():
 
     # Build command that sources ROS2 setup and runs the relay
     # Try multiple ROS2 setup paths (humble, iron, jazzy)
+    # Use GO2_DOMAIN_ID (default 30) — the Go2 robot communicates on this domain
+    _domain_id = GO2_DOMAIN_ID or ROS_DOMAIN_ID
     setup_cmd = (
         "source /opt/ros/humble/setup.bash 2>/dev/null "
         "|| source /opt/ros/iron/setup.bash 2>/dev/null "
@@ -681,15 +685,15 @@ def _start_relay_local():
         "|| true; "
         "source ~/go2_ws/install/setup.bash 2>/dev/null || true; "
         + (f"export RMW_IMPLEMENTATION={RMW_IMPLEMENTATION}; " if RMW_IMPLEMENTATION else "")
-        + (f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID}; " if ROS_DOMAIN_ID else "")
+        + (f"export ROS_DOMAIN_ID={_domain_id}; " if _domain_id else "")
         + f"python3 -u {_LOCAL_RELAY_PATH}"
     )
 
     env = os.environ.copy()
     if RMW_IMPLEMENTATION:
         env["RMW_IMPLEMENTATION"] = RMW_IMPLEMENTATION
-    if ROS_DOMAIN_ID:
-        env["ROS_DOMAIN_ID"] = ROS_DOMAIN_ID
+    if _domain_id:
+        env["ROS_DOMAIN_ID"] = _domain_id
     if CYCLONEDDS_URI:
         env["CYCLONEDDS_URI"] = CYCLONEDDS_URI
 
@@ -1003,7 +1007,7 @@ def _sport_pub_once(api_id, params):
     # Go2 subscriber uses BEST_EFFORT QoS — match it with --qos-reliability.
     # Publish at 10Hz for 5s — DDS discovery can take 1-2s, so we need enough
     # time for the subscriber to discover us and receive several messages.
-    remote = (f"echo '[env] RMW='$RMW_IMPLEMENTATION 'CDDS='$CYCLONEDDS_URI; "
+    remote = (f"echo '[env] RMW='$RMW_IMPLEMENTATION 'DOMAIN='$ROS_DOMAIN_ID 'CDDS='$CYCLONEDDS_URI; "
               f"timeout 5 ros2 topic pub --rate 10 "
               f"--qos-reliability best_effort "
               f"/api/sport/request {msg_type} {yaml_msg}")
