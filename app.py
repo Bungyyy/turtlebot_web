@@ -55,7 +55,7 @@ _proc_lock = threading.Lock()
 
 ROS_DOMAIN_ID = os.environ.get("ROS_DOMAIN_ID", "")
 RMW_IMPLEMENTATION = os.environ.get("RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp")
-GO2_DOMAIN_ID = os.environ.get("GO2_DOMAIN_ID", "30")
+GO2_DOMAIN_ID = os.environ.get("GO2_DOMAIN_ID", "")
 
 # CycloneDDS config – use eth0 on the Go2 (Jetson) network
 CYCLONEDDS_URI = os.environ.get("CYCLONEDDS_URI",
@@ -844,13 +844,12 @@ def _kill_relay():
     _teleop_relay_mode = None
 
 # ROS2 env setup to source on the Jetson via SSH.
-# Go2 uses ROS_DOMAIN_ID=30. We must set it AFTER sourcing setup.bash
-# because setup.bash can reset environment variables.
+# Set domain ID AFTER sourcing setup.bash (it can reset env vars).
 _JETSON_ROS_SETUP = (
     "source /opt/ros/humble/setup.bash 2>/dev/null || true; "
     "source ~/go2_ws/install/setup.bash 2>/dev/null; "
     f"export RMW_IMPLEMENTATION={RMW_IMPLEMENTATION}; "
-    f"export ROS_DOMAIN_ID={GO2_DOMAIN_ID}; "
+    + (f"export ROS_DOMAIN_ID={GO2_DOMAIN_ID}; " if GO2_DOMAIN_ID else "")
 )
 
 
