@@ -210,6 +210,34 @@
     }
   });
 
+  document.getElementById("btn-teleop-node").addEventListener("click", async () => {
+    const btn = document.getElementById("btn-teleop-node");
+    if (LaunchManager.isRunning("teleop")) {
+      btn.textContent = "Stopping...";
+      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "teleop" }) });
+      btn.textContent = "Start Teleop Node";
+      _setStatus("Teleop node stopped");
+      return;
+    }
+
+    btn.textContent = "Starting...";
+    _setStatus("Starting teleop node (go2_teleop)...");
+
+    const res = await (await fetch("/api/launch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(_launchBody("teleop")),
+    })).json();
+
+    if (res.ok) {
+      btn.textContent = "Stop Teleop Node";
+      _setStatus("Teleop node started — /cmd_vel bridge active");
+    } else {
+      btn.textContent = "Start Teleop Node";
+      _setStatus("Teleop failed: " + (res.message || res.error));
+    }
+  });
+
   document.getElementById("btn-rosbridge").addEventListener("click", async () => {
     const btn = document.getElementById("btn-rosbridge");
 
@@ -403,6 +431,13 @@
     } else if (bringBtn.textContent === "Stop Bringup") {
       bringBtn.textContent = "Start Bringup";
       _updateStepBadge("step1-badge", "Offline", "");
+    }
+
+    const teleopBtn = document.getElementById("btn-teleop-node");
+    if (LaunchManager.isRunning("teleop")) {
+      teleopBtn.textContent = "Stop Teleop Node";
+    } else if (teleopBtn.textContent === "Stop Teleop Node") {
+      teleopBtn.textContent = "Start Teleop Node";
     }
 
     const rbBtn = document.getElementById("btn-rosbridge");
