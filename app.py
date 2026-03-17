@@ -1088,9 +1088,16 @@ def sport_command():
     ok, detail = _sport_pub_once(api_id, parameter)
     label = data.get("label", str(api_id))
     print(f"[Sport] {label} (api_id={api_id}): {'OK' if ok else detail}")
-    if ok:
-        return jsonify({"ok": True, "api_id": api_id, "type": detail})
-    return jsonify({"ok": False, "error": detail}), 500
+    if not ok:
+        return jsonify({"ok": False, "error": detail}), 500
+
+    # After StandUp (1004), automatically send BalanceStand (1002) so the
+    # robot is ready to accept Move commands.
+    if api_id == 1004:
+        ok2, detail2 = _sport_pub_once(1002, {})
+        print(f"[Sport] BalanceStand (api_id=1002): {'OK' if ok2 else detail2}")
+
+    return jsonify({"ok": True, "api_id": api_id, "type": detail})
 
 
 @app.route("/api/sport/move", methods=["POST"])
