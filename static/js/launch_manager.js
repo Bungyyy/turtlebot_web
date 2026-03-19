@@ -129,23 +129,26 @@ const LaunchManager = (() => {
     if (data.maps.length === _lastMapCount) return;
     _lastMapCount = data.maps.length;
 
-    const select = document.getElementById("lm-map-select");
-    if (!select) return;
+    const selectors = ["lm-map-select", "lm-loc-map-select"];
+    for (const selId of selectors) {
+      const select = document.getElementById(selId);
+      if (!select) continue;
 
-    const currentVal = select.value;
-    select.innerHTML = '<option value="">-- Select map --</option>';
-    data.maps.forEach((m) => {
-      const opt = document.createElement("option");
-      opt.value = m.path;
-      opt.textContent = m.name;
-      select.appendChild(opt);
-    });
+      const currentVal = select.value;
+      select.innerHTML = '<option value="">-- Select map --</option>';
+      data.maps.forEach((m) => {
+        const opt = document.createElement("option");
+        opt.value = m.path;
+        opt.textContent = m.name;
+        select.appendChild(opt);
+      });
 
-    // Restore selection or auto-select last map
-    if (currentVal) {
-      select.value = currentVal;
-    } else if (data.maps.length > 0) {
-      select.value = data.maps[data.maps.length - 1].path;
+      // Restore selection or auto-select last map
+      if (currentVal) {
+        select.value = currentVal;
+      } else if (data.maps.length > 0) {
+        select.value = data.maps[data.maps.length - 1].path;
+      }
     }
   }
 
