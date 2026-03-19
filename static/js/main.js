@@ -378,6 +378,13 @@
       return;
     }
 
+    const locMapSelect = document.getElementById("lm-loc-map-select");
+    if (!locMapSelect || !locMapSelect.value) {
+      _showModeUI("localization");
+      _setStatus("Select a saved map first, then click Localization again");
+      return;
+    }
+
     _showModeUI("localization");
     _setStatus("Starting Localization...");
     _lastLaunchedProcess = "localization";
@@ -399,16 +406,17 @@
       })).json();
     }
 
-    // Launch localization
+    // Launch localization with map
+    const locArgs = [`map:=${locMapSelect.value}`];
     const res = await (await fetch("/api/launch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(_launchBody("localization")),
+      body: JSON.stringify(_launchBody("localization", { args: locArgs })),
     })).json();
 
     if (res.ok) {
       _updateStepBadge("step2-badge", "Localization", "badge-nav");
-      _setStatus("Localization started (bringup + localization.launch)");
+      _setStatus("Localization started with map");
     } else {
       _setStatus("Localization: " + (res.message || res.error));
     }
@@ -425,6 +433,13 @@
       navControls.style.display = "none";
       _updateStepBadge("step2-badge", "None", "");
       _setStatus("Navigation stopped");
+      return;
+    }
+
+    const mapSelect = document.getElementById("lm-map-select");
+    if (!mapSelect || !mapSelect.value) {
+      _showModeUI("navigation");
+      _setStatus("Select a saved map first, then click Navigation again");
       return;
     }
 
@@ -452,17 +467,18 @@
       return;
     }
 
-    // Launch navigation.launch
+    // Launch navigation.launch with map
     _setStatus("Starting navigation stack...");
+    const navArgs = [`map:=${mapSelect.value}`];
     const navRes = await (await fetch("/api/launch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(_launchBody("nav_stack")),
+      body: JSON.stringify(_launchBody("nav_stack", { args: navArgs })),
     })).json();
 
     if (navRes.ok) {
       _updateStepBadge("step2-badge", "Nav", "badge-nav");
-      _setStatus("Navigation started (transform + navigation.launch)");
+      _setStatus("Navigation started with map");
     } else {
       _setStatus("Navigation: " + (navRes.message || navRes.error));
     }
