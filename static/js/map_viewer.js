@@ -26,16 +26,12 @@ const MapViewer = (() => {
   let laserPoints = [];
   let navPath = [];
 
-  // Scan history: accumulated laser/pointcloud points to build a visual map (like rviz2)
-  const SCAN_HISTORY_MAX = 150000;  // max accumulated points
+  // Scan history: accumulated laser scan points to build a visual map (like rviz2)
+  const SCAN_HISTORY_MAX = 80000;  // max accumulated points
   let scanHistory = [];             // [{ x, y }] in world coords
+  let scanHistoryImage = null;      // offscreen canvas for fast rendering
+  let scanHistoryDirty = true;      // needs rebuild
   let lastScanHistoryPush = 0;
-
-  // PointCloud2 state
-  let cloudPoints = [];             // current frame cloud points (for live display)
-  let lastCloudPush = 0;
-  let pcl2MsgCount = 0;
-
   let costmapImage = null;
   let costmapData = null;
   let globalCostmapImage = null;
@@ -57,8 +53,6 @@ const MapViewer = (() => {
   let activeSubs = [];
 
   let mapOriginYaw = 0; // cached yaw of map origin orientation
-  let activeCloudTopic = null;     // currently subscribed cloud topic
-  let cloudSub = null;             // cloud topic subscription
 
   // ---- Coordinate conversion --------------------------------------------
   // World (meters) -> grid cell -> canvas pixels
@@ -128,18 +122,6 @@ const MapViewer = (() => {
     document.getElementById("btn-center-robot").addEventListener("click", _centerOnRobot);
     document.getElementById("btn-fit-map").addEventListener("click", _autoFit);
     document.getElementById("btn-clear-scan").addEventListener("click", clearScanHistory);
-
-    // Cloud topic selector
-    const cloudSelect = document.getElementById("cloud-topic-select");
-    if (cloudSelect) {
-      cloudSelect.addEventListener("change", () => {
-        _subscribeCloudTopic(cloudSelect.value);
-      });
-    }
-    const refreshBtn = document.getElementById("btn-refresh-topics");
-    if (refreshBtn) {
-      refreshBtn.addEventListener("click", _refreshAvailableTopics);
-    }
 
     canvas.addEventListener("mousemove", _onMouseMoveCoords);
     canvas.addEventListener("mouseleave", () => {
@@ -261,10 +243,6 @@ const MapViewer = (() => {
       _render();
     }, { throttle: 150 }));
 
-    // PointCloud2 (direct from FAST-LIO2 /cloud_registered)
-    const sel = document.getElementById("cloud-topic-select");
-    _subscribeCloudTopic(sel ? sel.value : "auto");
-
     // Nav path
     const _pathCb = (msg) => {
       navPath = (msg.poses || []).map((ps) => ({ x: ps.pose.position.x, y: ps.pose.position.y }));
@@ -336,73 +314,6 @@ const MapViewer = (() => {
     }, { throttle: 2000 }));
   }
 
-  // ---- Cloud topic management -------------------------------------------
-
-  function _cloudCallback(msg) {
-    _processPointCloud2(msg);
-    if (!mapData) {
-      document.getElementById("map-resolution").textContent = "Cloud: " + cloudPoints.length + " pts";
-      document.getElementById("map-size").textContent = "History: " + scanHistory.length;
-    }
-    _render();
-  }
-
-  function _subscribeCloudTopic(selection) {
-    // Unsubscribe existing cloud subs
-    if (cloudSub) {
-      try { cloudSub.unsubscribe(); } catch (_) {}
-      cloudSub = null;
-      activeCloudTopic = null;
-    }
-
-    if (selection === "auto") {
-      // Auto-detect: try common topics
-      const candidates = ["/cloud_registered", "/livox/lidar", "/points"];
-      for (const t of candidates) {
-        const sub = RosBridge.subscribe(t, "sensor_msgs/msg/PointCloud2", (msg) => {
-          if (activeCloudTopic && activeCloudTopic !== t) return;
-          if (!activeCloudTopic) {
-            activeCloudTopic = t;
-            cloudSub = sub;
-            console.log("[MapViewer] Auto-detected cloud topic:", t);
-            const sel = document.getElementById("cloud-topic-select");
-            if (sel) sel.value = t;
-          }
-          _cloudCallback(msg);
-        }, { throttle: 500 });
-        activeSubs.push(sub);
-      }
-    } else {
-      // Specific topic selected
-      console.log("[MapViewer] Subscribing to cloud topic:", selection);
-      cloudSub = RosBridge.subscribe(selection, "sensor_msgs/msg/PointCloud2", _cloudCallback, { throttle: 500 });
-      activeSubs.push(cloudSub);
-      activeCloudTopic = selection;
-    }
-  }
-
-  function _refreshAvailableTopics() {
-    RosBridge.callService("/rosapi/topics", "rosapi/srv/Topics", {})
-      .then((result) => {
-        const topics = result.topics || [];
-        const sel = document.getElementById("cloud-topic-select");
-        if (!sel) return;
-        // Keep auto option, rebuild rest
-        sel.innerHTML = '<option value="auto">Auto-detect</option>';
-        for (const t of topics) {
-          if (t.includes("cloud") || t.includes("points") || t.includes("lidar") ||
-              t.includes("velodyne") || t.includes("livox")) {
-            const opt = document.createElement("option");
-            opt.value = t;
-            opt.textContent = t;
-            sel.appendChild(opt);
-          }
-        }
-        console.log("[MapViewer] Refreshed topics, found cloud candidates");
-      })
-      .catch((e) => console.warn("[MapViewer] Failed to refresh topics:", e));
-  }
-
   // ---- Odom trail -------------------------------------------------------
 
   function _pushTrail(pose) {
@@ -443,107 +354,6 @@ const MapViewer = (() => {
         scanHistory = scanHistory.slice(scanHistory.length - SCAN_HISTORY_MAX);
       }
       scanHistoryDirty = true;
-    }
-  }
-
-  // ---- PointCloud2 decoder ----------------------------------------------
-
-  function _processPointCloud2(msg) {
-    const pose = robotPose || (odomPose && _odomToMap(odomPose));
-
-    // Parse field layout to find x, y, z offsets
-    const fields = msg.fields || [];
-    let xOff = -1, yOff = -1, zOff = -1;
-    for (const f of fields) {
-      if (f.name === "x") xOff = f.offset;
-      else if (f.name === "y") yOff = f.offset;
-      else if (f.name === "z") zOff = f.offset;
-    }
-    if (xOff < 0 || yOff < 0) {
-      if (pcl2MsgCount++ === 0) console.warn("[MapViewer] PointCloud2: no x/y fields found", fields);
-      return;
-    }
-
-    const pointStep = msg.point_step;
-    const width = msg.width;
-    const height = msg.height || 1;
-    const totalPoints = width * height;
-
-    // Decode base64 data to ArrayBuffer
-    let bytes;
-    try {
-      const b64 = msg.data;
-      if (typeof b64 === "string") {
-        const bin = atob(b64);
-        bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      } else if (b64 instanceof Array) {
-        bytes = new Uint8Array(b64);
-      } else {
-        bytes = new Uint8Array(b64);
-      }
-    } catch (e) {
-      if (pcl2MsgCount++ < 3) console.error("[MapViewer] PointCloud2 decode error:", e);
-      return;
-    }
-
-    const dv = new DataView(bytes.buffer);
-    const isLE = !msg.is_bigendian;
-
-    // Height filter for 2D projection (keep obstacle-height points)
-    const zMin = -0.3, zMax = 1.5;
-
-    // Downsample: skip points to keep performance manageable
-    const skip = Math.max(1, Math.floor(totalPoints / 3000));
-    const pts = [];
-
-    for (let i = 0; i < totalPoints; i += skip) {
-      const off = i * pointStep;
-      if (off + yOff + 4 > bytes.length) break;
-
-      const px = dv.getFloat32(off + xOff, isLE);
-      const py = dv.getFloat32(off + yOff, isLE);
-
-      if (!isFinite(px) || !isFinite(py)) continue;
-
-      // Height filter if z available
-      if (zOff >= 0 && off + zOff + 4 <= bytes.length) {
-        const pz = dv.getFloat32(off + zOff, isLE);
-        if (!isFinite(pz) || pz < zMin || pz > zMax) continue;
-      }
-
-      // Range filter (skip very close/far points)
-      const dist = Math.sqrt(px * px + py * py);
-      if (dist < 0.2 || dist > 50) continue;
-
-      // Transform from sensor frame to world frame using robot pose
-      if (pose) {
-        const cosR = Math.cos(pose.theta), sinR = Math.sin(pose.theta);
-        pts.push({
-          x: pose.x + cosR * px - sinR * py,
-          y: pose.y + sinR * px + cosR * py
-        });
-      } else {
-        pts.push({ x: px, y: py });
-      }
-    }
-
-    cloudPoints = pts;
-
-    // Accumulate to scan history
-    const now = Date.now();
-    if (now - lastScanHistoryPush > 300 && pts.length > 0) {
-      lastScanHistoryPush = now;
-      for (const p of pts) scanHistory.push(p);
-      if (scanHistory.length > SCAN_HISTORY_MAX) {
-        scanHistory = scanHistory.slice(scanHistory.length - SCAN_HISTORY_MAX);
-      }
-    }
-
-    if (pcl2MsgCount++ < 5) {
-      console.log("[MapViewer] PointCloud2:", totalPoints, "total,", pts.length,
-        "rendered, skip:", skip, "history:", scanHistory.length,
-        "pose:", pose ? (pose.x.toFixed(2) + "," + pose.y.toFixed(2)) : "none");
     }
   }
 
@@ -711,11 +521,8 @@ const MapViewer = (() => {
       _drawCostmapOverlay(costmapImage, costmapData, 0.7);
     }
 
-    // 2c. Scan history (accumulated laser/pointcloud = visual map like rviz2)
+    // 2c. Scan history (accumulated laser scans = visual map)
     if (layers.map && scanHistory.length > 0 && !hasMap) _drawScanHistory();
-
-    // 2d. Live cloud points (current frame, lighter color)
-    if (layers.laser && cloudPoints.length > 0) _drawCloudPoints();
 
     // 3. Grid
     if (layers.grid && hasMap) _drawGrid();
@@ -763,9 +570,8 @@ const MapViewer = (() => {
     if (!hasMap && robotPose) {
       ctx.fillStyle = "rgba(180,80,0,0.9)";
       ctx.font = "bold 11px monospace";
-      const scanInfo = scanHistory.length > 0 ? " | Map pts: " + scanHistory.length : "";
-      const cloudInfo = cloudPoints.length > 0 ? " | Cloud: " + cloudPoints.length : "";
-      ctx.fillText("FAST-LIO2 mode (pointcloud + odom)" + scanInfo + cloudInfo, 10, H - 30);
+      const scanInfo = scanHistory.length > 0 ? " | Scan pts: " + scanHistory.length : "";
+      ctx.fillText("FAST-LIO2 mode (laser + odom)" + scanInfo, 10, H - 30);
     } else if (!tfMapToOdom && !hasAmcl && odomPose && hasMap) {
       ctx.fillStyle = "rgba(180,80,0,0.9)";
       ctx.font = "bold 11px monospace";
@@ -945,25 +751,10 @@ const MapViewer = (() => {
 
   function _drawScanHistory() {
     if (scanHistory.length === 0) return;
-    // Dark points for obstacle map (accumulated), like rviz2 map display
-    const len = scanHistory.length;
-    for (let i = 0; i < len; i++) {
+    // Dark gray points for accumulated scan (wall/obstacle map)
+    ctx.fillStyle = "#3a3a3a";
+    for (let i = 0; i < scanHistory.length; i++) {
       const p = _worldToCanvas(scanHistory[i].x, scanHistory[i].y);
-      // Older points slightly faded, newer points solid
-      const age = 1 - (i / len) * 0.6;  // 0.4 to 1.0
-      const g = Math.round(60 * age);
-      ctx.fillStyle = "rgba(" + g + "," + g + "," + g + ",0.8)";
-      ctx.fillRect(p.cx - 1, p.cy - 1, 3, 3);
-    }
-  }
-
-  // ---- Live cloud points (current PointCloud2 frame) --------------------
-
-  function _drawCloudPoints() {
-    if (cloudPoints.length === 0) return;
-    ctx.fillStyle = "#00e5ff";  // bright cyan, slightly different from laser
-    for (const cp of cloudPoints) {
-      const p = _worldToCanvas(cp.x, cp.y);
       ctx.fillRect(p.cx - 1, p.cy - 1, 2, 2);
     }
   }
@@ -1141,7 +932,7 @@ const MapViewer = (() => {
 
   function _setStatus(msg) { document.getElementById("status-message").textContent = msg; }
   function getRobotPose() { return robotPose; }
-  function clearScanHistory() { scanHistory = []; cloudPoints = []; _render(); }
+  function clearScanHistory() { scanHistory = []; scanHistoryDirty = true; _render(); }
 
   return { init, subscribeTopics, setMode, navigateTo, getRobotPose,
            centerOnRobot: _centerOnRobot, fitMap: _autoFit, clearScanHistory };
