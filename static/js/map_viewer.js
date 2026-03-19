@@ -176,8 +176,8 @@ const MapViewer = (() => {
 
     // Odom (ODOM frame) – primary pose source when combined with TF
     let odomCount = 0;
-    activeSubs.push(RosBridge.subscribe("/odom", "nav_msgs/msg/Odometry", (msg) => {
-      if (odomCount++ === 0) console.log("[MapViewer] First /odom received");
+    const _onOdom = (msg) => {
+      if (odomCount++ === 0) console.log("[MapViewer] First odom received from:", msg._topic || "odom");
       const p = msg.pose.pose;
       odomPose = { x: p.position.x, y: p.position.y, theta: _qToYaw(p.orientation) };
       // Always use odom+TF when TF available – this is always consistent
@@ -197,7 +197,10 @@ const MapViewer = (() => {
         _pushTrail(robotPose);
         _render();
       }
-    }, { throttle: 50 }));
+    };
+    // Subscribe to standard /odom and FAST-LIO's /Odometry topic
+    activeSubs.push(RosBridge.subscribe("/odom", "nav_msgs/msg/Odometry", _onOdom, { throttle: 50 }));
+    activeSubs.push(RosBridge.subscribe("/Odometry", "nav_msgs/msg/Odometry", _onOdom, { throttle: 50 }));
 
     // TF map->odom
     let tfCount = 0;
