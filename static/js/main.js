@@ -332,6 +332,17 @@
     navControls.style.display = mode === "navigation" ? "block" : "none";
   }
 
+  /** Check if a process is still running after launch. Returns { running, log } */
+  async function _checkProcessHealth(name, delayMs) {
+    await new Promise((r) => setTimeout(r, delayMs));
+    try {
+      const data = await (await fetch(`/api/process_log/${name}`)).json();
+      return { running: data.running, log: data.log || [] };
+    } catch (_) {
+      return { running: false, log: [] };
+    }
+  }
+
   btnSlam.addEventListener("click", async () => {
     if (LaunchManager.isRunning("slam") || LaunchManager.isRunning("livox")) {
       _setStatus("Stopping SLAM...");
@@ -355,6 +366,17 @@
       }
     }
 
+    // Ensure bringup is running (needed for odometry)
+    if (!LaunchManager.isRunning("bringup")) {
+      _setStatus("Starting bringup for SLAM...");
+      await (await fetch("/api/launch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(_launchBody("bringup")),
+      })).json();
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+
     // Launch Livox LiDAR driver first
     _setStatus("Starting LiDAR driver (Livox MID-360)...");
     const livoxRes = await (await fetch("/api/launch", {
@@ -368,8 +390,15 @@
       return;
     }
 
-    // Wait a moment for LiDAR driver to initialize
-    await new Promise((r) => setTimeout(r, 3000));
+    // Check if livox is actually still running after 3s
+    _setStatus("Waiting for LiDAR driver to initialize...");
+    const livoxHealth = await _checkProcessHealth("livox", 3000);
+    if (!livoxHealth.running) {
+      const lastLines = livoxHealth.log.slice(-5).join("\n");
+      _setStatus("LiDAR driver crashed: " + (lastLines || "check logs"));
+      _lastLaunchedProcess = "livox";
+      return;
+    }
 
     // Launch FAST-LIO2 mapping
     _setStatus("Starting FAST-LIO2 mapping...");
@@ -379,12 +408,21 @@
       body: JSON.stringify(_launchBody("slam")),
     })).json();
 
-    if (res.ok) {
-      _updateStepBadge("step2-badge", "FAST-LIO2", "badge-slam");
-      _setStatus("FAST-LIO2 3D mapping started — drive the robot to map the area");
-    } else {
+    if (!res.ok) {
       _setStatus("SLAM: " + (res.message || res.error));
+      return;
     }
+
+    // Check if fast_lio is actually still running after 3s
+    const slamHealth = await _checkProcessHealth("slam", 3000);
+    if (!slamHealth.running) {
+      const lastLines = slamHealth.log.slice(-5).join("\n");
+      _setStatus("FAST-LIO2 crashed: " + (lastLines || "check logs"));
+      return;
+    }
+
+    _updateStepBadge("step2-badge", "FAST-LIO2", "badge-slam");
+    _setStatus("FAST-LIO2 3D mapping started — drive the robot to map the area");
   });
 
   // ---- Localization mode: bringup + localization.launch --------------------
