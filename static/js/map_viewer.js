@@ -25,6 +25,13 @@ const MapViewer = (() => {
   let lastTrailTime = 0;
   let laserPoints = [];
   let navPath = [];
+
+  // Scan history: accumulated laser scan points to build a visual map (like rviz2)
+  const SCAN_HISTORY_MAX = 80000;  // max accumulated points
+  let scanHistory = [];             // [{ x, y }] in world coords
+  let scanHistoryImage = null;      // offscreen canvas for fast rendering
+  let scanHistoryDirty = true;      // needs rebuild
+  let lastScanHistoryPush = 0;
   let costmapImage = null;
   let costmapData = null;
   let globalCostmapImage = null;
@@ -114,6 +121,7 @@ const MapViewer = (() => {
     document.getElementById("btn-zoom-out").addEventListener("click", () => _zoomCenter(0.8));
     document.getElementById("btn-center-robot").addEventListener("click", _centerOnRobot);
     document.getElementById("btn-fit-map").addEventListener("click", _autoFit);
+    document.getElementById("btn-clear-scan").addEventListener("click", clearScanHistory);
 
     canvas.addEventListener("mousemove", _onMouseMoveCoords);
     canvas.addEventListener("mouseleave", () => {
@@ -227,6 +235,11 @@ const MapViewer = (() => {
     // LaserScan
     activeSubs.push(RosBridge.subscribe("/scan", "sensor_msgs/msg/LaserScan", (msg) => {
       _processLaserScan(msg);
+      // Update status bar in virtual mode
+      if (!mapData && scanHistory.length > 0) {
+        document.getElementById("map-resolution").textContent = "Res: 0.020 m/px";
+        document.getElementById("map-size").textContent = "Scan: " + scanHistory.length + " pts";
+      }
       _render();
     }, { throttle: 150 }));
 
@@ -329,6 +342,19 @@ const MapViewer = (() => {
       pts.push({ x: pose.x + cosR*lx - sinR*ly, y: pose.y + sinR*lx + cosR*ly });
     }
     laserPoints = pts;
+
+    // Accumulate scan history for visual map building (rviz2-like)
+    const now = Date.now();
+    if (now - lastScanHistoryPush > 200) {  // throttle: add every 200ms
+      lastScanHistoryPush = now;
+      for (const p of pts) {
+        scanHistory.push(p);
+      }
+      if (scanHistory.length > SCAN_HISTORY_MAX) {
+        scanHistory = scanHistory.slice(scanHistory.length - SCAN_HISTORY_MAX);
+      }
+      scanHistoryDirty = true;
+    }
   }
 
   // ---- Map image build --------------------------------------------------
@@ -470,11 +496,11 @@ const MapViewer = (() => {
     const W = canvas.width, H = canvas.height;
     ctx.clearRect(0, 0, W, H);
 
-    // Light gray background like KraiPlatform reference
-    ctx.fillStyle = "#b8b8b8";
-    ctx.fillRect(0, 0, W, H);
-
     const hasMap = !!(mapImage && mapData);
+
+    // Background: light gray when we have a map, white-ish in FAST-LIO2 mode
+    ctx.fillStyle = hasMap ? "#b8b8b8" : "#e8e8e8";
+    ctx.fillRect(0, 0, W, H);
 
     // 1. Occupancy grid
     if (hasMap && layers.map) {
@@ -495,8 +521,12 @@ const MapViewer = (() => {
       _drawCostmapOverlay(costmapImage, costmapData, 0.7);
     }
 
+    // 2c. Scan history (accumulated laser scans = visual map)
+    if (layers.map && scanHistory.length > 0 && !hasMap) _drawScanHistory();
+
     // 3. Grid
     if (layers.grid && hasMap) _drawGrid();
+    if (layers.grid && !hasMap && robotPose) _drawVirtualGrid();
 
     // 4. Odom trail
     if (layers.odom && odomTrail.length > 1) _drawOdomTrail();
@@ -540,7 +570,8 @@ const MapViewer = (() => {
     if (!hasMap && robotPose) {
       ctx.fillStyle = "rgba(180,80,0,0.9)";
       ctx.font = "bold 11px monospace";
-      ctx.fillText("No /map topic \u2014 FAST-LIO2 mode (laser + odom only)", 10, H - 30);
+      const scanInfo = scanHistory.length > 0 ? " | Scan pts: " + scanHistory.length : "";
+      ctx.fillText("FAST-LIO2 mode (laser + odom)" + scanInfo, 10, H - 30);
     } else if (!tfMapToOdom && !hasAmcl && odomPose && hasMap) {
       ctx.fillStyle = "rgba(180,80,0,0.9)";
       ctx.font = "bold 11px monospace";
@@ -570,6 +601,36 @@ const MapViewer = (() => {
       const { cy } = _worldToCanvas(0, wy);
       ctx.beginPath(); ctx.moveTo(panX, cy); ctx.lineTo(panX + mapWpx, cy); ctx.stroke();
     }
+  }
+
+  // ---- Virtual grid (FAST-LIO2 mode, no /map) --------------------------
+
+  function _drawVirtualGrid() {
+    const pxPerMeter = VIRTUAL_PPM * scale;
+    if (pxPerMeter < 10) return;
+    ctx.strokeStyle = "rgba(0,0,0,0.08)";
+    ctx.lineWidth = 0.5;
+    const W = canvas.width, H = canvas.height;
+    // Vertical lines every meter
+    const startCol = Math.floor(-panX / (VIRTUAL_PPM * scale));
+    const endCol = Math.ceil((W - panX) / (VIRTUAL_PPM * scale));
+    for (let wx = startCol; wx <= endCol; wx++) {
+      const cx = panX + wx * VIRTUAL_PPM * scale;
+      ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.stroke();
+    }
+    // Horizontal lines every meter
+    const startRow = Math.floor(-panY / (VIRTUAL_PPM * scale));
+    const endRow = Math.ceil((H - panY) / (VIRTUAL_PPM * scale));
+    for (let wy = startRow; wy <= endRow; wy++) {
+      const cy = panY + wy * VIRTUAL_PPM * scale;
+      ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.stroke();
+    }
+    // Origin cross
+    const o = _worldToCanvas(0, 0);
+    ctx.strokeStyle = "rgba(255,0,0,0.25)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(o.cx - 15, o.cy); ctx.lineTo(o.cx + 15, o.cy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(o.cx, o.cy - 15); ctx.lineTo(o.cx, o.cy + 15); ctx.stroke();
   }
 
   // ---- Robot (quadruped shape for Go2) ----------------------------------
@@ -686,6 +747,18 @@ const MapViewer = (() => {
     }
   }
 
+  // ---- Scan history (accumulated map) ------------------------------------
+
+  function _drawScanHistory() {
+    if (scanHistory.length === 0) return;
+    // Dark gray points for accumulated scan (wall/obstacle map)
+    ctx.fillStyle = "#3a3a3a";
+    for (let i = 0; i < scanHistory.length; i++) {
+      const p = _worldToCanvas(scanHistory[i].x, scanHistory[i].y);
+      ctx.fillRect(p.cx - 1, p.cy - 1, 2, 2);
+    }
+  }
+
   // ---- Markers ----------------------------------------------------------
 
   function _drawMarker(wx, wy, color, label) {
@@ -710,7 +783,9 @@ const MapViewer = (() => {
 
   function _onClick(e) {
     if (dragMoved) { dragMoved = false; return; }
-    if (!interactionMode || !mapData) return;
+    if (!interactionMode) return;
+    // Allow clicks in both map mode and virtual mode (FAST-LIO2)
+    if (!mapData && !robotPose) return;
     const rect = canvas.getBoundingClientRect();
     const world = _canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
     if (interactionMode === "navigate") _sendNavGoal(world.x, world.y);
@@ -857,6 +932,8 @@ const MapViewer = (() => {
 
   function _setStatus(msg) { document.getElementById("status-message").textContent = msg; }
   function getRobotPose() { return robotPose; }
+  function clearScanHistory() { scanHistory = []; scanHistoryDirty = true; _render(); }
 
-  return { init, subscribeTopics, setMode, navigateTo, getRobotPose, centerOnRobot: _centerOnRobot, fitMap: _autoFit };
+  return { init, subscribeTopics, setMode, navigateTo, getRobotPose,
+           centerOnRobot: _centerOnRobot, fitMap: _autoFit, clearScanHistory };
 })();
