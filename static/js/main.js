@@ -333,9 +333,10 @@
   }
 
   btnSlam.addEventListener("click", async () => {
-    if (LaunchManager.isRunning("slam")) {
+    if (LaunchManager.isRunning("slam") || LaunchManager.isRunning("livox")) {
       _setStatus("Stopping SLAM...");
       await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "slam" }) });
+      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "livox" }) });
       btnSlam.classList.remove("active");
       slamControls.style.display = "none";
       _updateStepBadge("step2-badge", "None", "");
@@ -347,10 +348,31 @@
     _setStatus("Starting SLAM...");
     _lastLaunchedProcess = "slam";
 
-    if (LaunchManager.isRunning("navigation")) {
-      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "navigation" }) });
+    // Stop conflicting modes
+    for (const proc of ["navigation", "nav_stack", "transform", "localization"]) {
+      if (LaunchManager.isRunning(proc)) {
+        await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: proc }) });
+      }
     }
 
+    // Launch Livox LiDAR driver first
+    _setStatus("Starting LiDAR driver (Livox MID-360)...");
+    const livoxRes = await (await fetch("/api/launch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(_launchBody("livox")),
+    })).json();
+
+    if (!livoxRes.ok) {
+      _setStatus("LiDAR driver failed: " + (livoxRes.message || livoxRes.error));
+      return;
+    }
+
+    // Wait a moment for LiDAR driver to initialize
+    await new Promise((r) => setTimeout(r, 3000));
+
+    // Launch FAST-LIO2 mapping
+    _setStatus("Starting FAST-LIO2 mapping...");
     const res = await (await fetch("/api/launch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -390,7 +412,7 @@
     _lastLaunchedProcess = "localization";
 
     // Stop conflicting modes
-    for (const proc of ["slam", "navigation", "nav_stack", "transform"]) {
+    for (const proc of ["slam", "livox", "navigation", "nav_stack", "transform"]) {
       if (LaunchManager.isRunning(proc)) {
         await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: proc }) });
       }
@@ -448,7 +470,7 @@
     _lastLaunchedProcess = "nav_stack";
 
     // Stop conflicting modes
-    for (const proc of ["slam", "navigation", "localization"]) {
+    for (const proc of ["slam", "livox", "navigation", "localization"]) {
       if (LaunchManager.isRunning(proc)) {
         await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: proc }) });
       }
@@ -564,6 +586,9 @@
           n.includes("go2") || n.includes("unitree") ||
           n.includes("robot_state_publisher")
         );
+        const hasLivox = nodes.some((n) =>
+          n.includes("livox") || n.includes("MID360")
+        );
         const hasSlam = nodes.some((n) =>
           n.includes("slam") || n.includes("fast_lio") ||
           n.includes("fastlio") || n.includes("lio_sam")
@@ -579,12 +604,14 @@
         const hasCamera = nodes.some((n) => n.includes("camera") || n.includes("image") || n.includes("astra"));
 
         setNodeStatus("node-turtlebot", hasGo2);
+        setNodeStatus("node-livox", hasLivox);
         setNodeStatus("node-slam", hasSlam || hasAmcl);
         setNodeStatus("node-navigation", hasNav);
         setNodeStatus("node-camera", hasCamera);
 
         _setRosNode("rn-rosbridge", true);
         _setRosNode("rn-turtlebot", hasGo2);
+        _setRosNode("rn-livox", hasLivox);
         _setRosNode("rn-slam", hasSlam);
         _setRosNode("rn-amcl", hasAmcl);
         _setRosNode("rn-navigation", hasNav);
