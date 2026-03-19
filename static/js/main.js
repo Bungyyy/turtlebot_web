@@ -296,7 +296,7 @@
   let _lastLaunchedProcess = "bringup";
 
   async function _pollLog() {
-    const order = [_lastLaunchedProcess, "slam", "navigation", "bringup", "rosbridge"];
+    const order = [_lastLaunchedProcess, "slam", "livox", "pcl_to_scan", "navigation", "bringup", "rosbridge"];
     const seen = new Set();
     for (const name of order) {
       if (seen.has(name)) continue;
@@ -344,8 +344,9 @@
   }
 
   btnSlam.addEventListener("click", async () => {
-    if (LaunchManager.isRunning("slam") || LaunchManager.isRunning("livox")) {
+    if (LaunchManager.isRunning("slam") || LaunchManager.isRunning("livox") || LaunchManager.isRunning("pcl_to_scan")) {
       _setStatus("Stopping SLAM...");
+      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "pcl_to_scan" }) });
       await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "slam" }) });
       await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "livox" }) });
       btnSlam.classList.remove("active");
@@ -421,6 +422,14 @@
       return;
     }
 
+    // Launch pointcloud_to_laserscan to convert /cloud_registered -> /scan
+    _setStatus("Starting pointcloud to laserscan converter...");
+    await (await fetch("/api/launch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(_launchBody("pcl_to_scan")),
+    })).json();
+
     _updateStepBadge("step2-badge", "FAST-LIO2", "badge-slam");
     _setStatus("FAST-LIO2 3D mapping started — drive the robot to map the area");
   });
@@ -450,7 +459,7 @@
     _lastLaunchedProcess = "localization";
 
     // Stop conflicting modes
-    for (const proc of ["slam", "livox", "navigation", "nav_stack", "transform"]) {
+    for (const proc of ["slam", "livox", "pcl_to_scan", "navigation", "nav_stack", "transform"]) {
       if (LaunchManager.isRunning(proc)) {
         await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: proc }) });
       }
@@ -508,7 +517,7 @@
     _lastLaunchedProcess = "nav_stack";
 
     // Stop conflicting modes
-    for (const proc of ["slam", "livox", "navigation", "localization"]) {
+    for (const proc of ["slam", "livox", "pcl_to_scan", "navigation", "localization"]) {
       if (LaunchManager.isRunning(proc)) {
         await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: proc }) });
       }
