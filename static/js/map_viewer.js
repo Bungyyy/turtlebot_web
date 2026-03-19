@@ -230,6 +230,16 @@ const MapViewer = (() => {
       _render();
     }, { throttle: 150 }));
 
+    // PointCloud2 direct rendering (FAST-LIO /cloud_registered fallback)
+    // This bypasses the need for pointcloud_to_laserscan node
+    let pclCount = 0;
+    const _onPointCloud2 = (msg) => {
+      if (pclCount++ === 0) console.log("[MapViewer] First PointCloud2 received");
+      _processPointCloud2(msg);
+      _render();
+    };
+    activeSubs.push(RosBridge.subscribe("/cloud_registered", "sensor_msgs/msg/PointCloud2", _onPointCloud2, { throttle: 200 }));
+
     // Nav path
     const _pathCb = (msg) => {
       navPath = (msg.poses || []).map((ps) => ({ x: ps.pose.position.x, y: ps.pose.position.y }));
@@ -329,6 +339,68 @@ const MapViewer = (() => {
       pts.push({ x: pose.x + cosR*lx - sinR*ly, y: pose.y + sinR*lx + cosR*ly });
     }
     laserPoints = pts;
+  }
+
+  // ---- PointCloud2 processing -------------------------------------------
+
+  function _processPointCloud2(msg) {
+    const pose = robotPose || (odomPose && _odomToMap(odomPose));
+    if (!pose) return;
+
+    // Decode base64 data to byte array
+    const raw = msg.data;
+    let bytes;
+    if (typeof raw === "string") {
+      // base64 encoded (rosbridge default for uint8[])
+      const bin = atob(raw);
+      bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    } else if (raw instanceof Array) {
+      bytes = new Uint8Array(raw);
+    } else {
+      return; // unsupported format
+    }
+
+    // Find x, y, z field offsets from the fields array
+    let xOff = -1, yOff = -1, zOff = -1;
+    for (const f of (msg.fields || [])) {
+      if (f.name === "x") xOff = f.offset;
+      else if (f.name === "y") yOff = f.offset;
+      else if (f.name === "z") zOff = f.offset;
+    }
+    if (xOff < 0 || yOff < 0) return;
+
+    const view = new DataView(bytes.buffer);
+    const step = msg.point_step;
+    const count = Math.floor(bytes.length / step);
+    const isLE = !msg.is_bigendian;
+    const cosR = Math.cos(pose.theta);
+    const sinR = Math.sin(pose.theta);
+
+    const pts = [];
+    // Sample every Nth point for performance (max ~2000 points)
+    const skip = Math.max(1, Math.floor(count / 2000));
+    for (let i = 0; i < count; i += skip) {
+      const off = i * step;
+      if (off + Math.max(xOff, yOff, zOff >= 0 ? zOff : 0) + 4 > bytes.length) break;
+      const px = view.getFloat32(off + xOff, isLE);
+      const py = view.getFloat32(off + yOff, isLE);
+      // Height filter: only keep points near robot height (-0.3m to 0.5m)
+      if (zOff >= 0) {
+        const pz = view.getFloat32(off + zOff, isLE);
+        if (pz < -0.3 || pz > 0.5) continue;
+      }
+      if (!isFinite(px) || !isFinite(py)) continue;
+      const r = Math.sqrt(px * px + py * py);
+      if (r < 0.3 || r > 30) continue;
+      // Transform from body frame to map frame
+      pts.push({
+        x: pose.x + cosR * px - sinR * py,
+        y: pose.y + sinR * px + cosR * py,
+      });
+    }
+    // Only update if we got points (don't clear LaserScan data if PCL is empty)
+    if (pts.length > 0) laserPoints = pts;
   }
 
   // ---- Map image build --------------------------------------------------
