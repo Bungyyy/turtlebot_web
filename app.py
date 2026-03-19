@@ -90,6 +90,9 @@ LAUNCH_COMMANDS = {
     "teleop": [
         "ros2", "launch", "go2_teleop", "teleop.launch",
     ],
+    "livox": [
+        "ros2", "launch", "livox_ros_driver2", "msg_MID360_launch.py",
+    ],
     "slam": [
         "ros2", "launch", "fast_lio", "mapping.launch.py",
         "rviz:=false",
@@ -115,6 +118,7 @@ LAUNCH_COMMANDS = {
 _KILL_PATTERNS = {
     "rosbridge": ["rosbridge_websocket", "rosapi"],
     "teleop": ["teleop_twist_keyboard"],
+    "livox": ["livox_ros_driver2", "msg_MID360"],
     "slam": ["fastlio_mapping", "fast_lio", "pointcloud_to_laserscan"],
     "navigation": ["bt_navigator", "controller_server", "planner_server",
                     "behavior_server", "lifecycle_manager_navigation"],
