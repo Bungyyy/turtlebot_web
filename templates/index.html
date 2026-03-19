@@ -87,6 +87,7 @@
             <div class="wf-body">
               <div class="mode-buttons">
                 <button id="btn-slam-mode" class="btn-mode">3D Mapping (FAST-LIO2)</button>
+                <button id="btn-loc-mode" class="btn-mode">Localization</button>
                 <button id="btn-nav-mode" class="btn-mode">Navigation</button>
               </div>
               <!-- SLAM sub-controls -->
@@ -96,8 +97,17 @@
                   <button id="btn-lm-save-map" class="btn-action btn-primary btn-sm">Save Map</button>
                 </div>
               </div>
+              <!-- Localization sub-controls -->
+              <div id="loc-controls" class="mode-sub" style="display:none">
+                <div class="mode-sub-row" style="color:#aaa; font-size:12px;">
+                  Launches: bringup + localization.launch
+                </div>
+              </div>
               <!-- Navigation sub-controls -->
               <div id="nav-controls" class="mode-sub" style="display:none">
+                <div class="mode-sub-row" style="color:#aaa; font-size:12px;">
+                  Launches: transform.launch + navigation.launch
+                </div>
                 <div class="mode-sub-row">
                   <select id="lm-map-select" class="input-sm">
                     <option value="">-- Select map --</option>
@@ -365,7 +375,19 @@
           </div>
           <div class="lm-row" id="lm-navigation">
             <div class="lm-indicator stopped"></div>
-            <div class="lm-info"><div class="lm-name">Navigation</div><div class="lm-status-text">Stopped</div></div>
+            <div class="lm-info"><div class="lm-name">Navigation (legacy)</div><div class="lm-status-text">Stopped</div></div>
+          </div>
+          <div class="lm-row" id="lm-localization">
+            <div class="lm-indicator stopped"></div>
+            <div class="lm-info"><div class="lm-name">Localization</div><div class="lm-status-text">Stopped</div></div>
+          </div>
+          <div class="lm-row" id="lm-transform">
+            <div class="lm-indicator stopped"></div>
+            <div class="lm-info"><div class="lm-name">Transform</div><div class="lm-status-text">Stopped</div></div>
+          </div>
+          <div class="lm-row" id="lm-nav_stack">
+            <div class="lm-indicator stopped"></div>
+            <div class="lm-info"><div class="lm-name">Nav Stack</div><div class="lm-status-text">Stopped</div></div>
           </div>
         </div>
 

@@ -317,14 +317,18 @@
   // ---- STEP 2: Mode (SLAM / Navigation) ---------------------------------
 
   const slamControls = document.getElementById("slam-controls");
+  const locControls = document.getElementById("loc-controls");
   const navControls = document.getElementById("nav-controls");
   const btnSlam = document.getElementById("btn-slam-mode");
+  const btnLoc = document.getElementById("btn-loc-mode");
   const btnNav = document.getElementById("btn-nav-mode");
 
   function _showModeUI(mode) {
     btnSlam.classList.toggle("active", mode === "slam");
+    btnLoc.classList.toggle("active", mode === "localization");
     btnNav.classList.toggle("active", mode === "navigation");
     slamControls.style.display = mode === "slam" ? "block" : "none";
+    locControls.style.display = mode === "localization" ? "block" : "none";
     navControls.style.display = mode === "navigation" ? "block" : "none";
   }
 
@@ -361,10 +365,62 @@
     }
   });
 
+  // ---- Localization mode: bringup + localization.launch --------------------
+
+  btnLoc.addEventListener("click", async () => {
+    if (LaunchManager.isRunning("localization")) {
+      _setStatus("Stopping Localization...");
+      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "localization" }) });
+      btnLoc.classList.remove("active");
+      locControls.style.display = "none";
+      _updateStepBadge("step2-badge", "None", "");
+      _setStatus("Localization stopped");
+      return;
+    }
+
+    _showModeUI("localization");
+    _setStatus("Starting Localization...");
+    _lastLaunchedProcess = "localization";
+
+    // Stop conflicting modes
+    for (const proc of ["slam", "navigation", "nav_stack", "transform"]) {
+      if (LaunchManager.isRunning(proc)) {
+        await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: proc }) });
+      }
+    }
+
+    // Ensure bringup is running
+    if (!LaunchManager.isRunning("bringup")) {
+      _setStatus("Starting bringup for localization...");
+      await (await fetch("/api/launch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(_launchBody("bringup")),
+      })).json();
+    }
+
+    // Launch localization
+    const res = await (await fetch("/api/launch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(_launchBody("localization")),
+    })).json();
+
+    if (res.ok) {
+      _updateStepBadge("step2-badge", "Localization", "badge-nav");
+      _setStatus("Localization started (bringup + localization.launch)");
+    } else {
+      _setStatus("Localization: " + (res.message || res.error));
+    }
+  });
+
+  // ---- Navigation mode: transform.launch + navigation.launch --------------
+
   btnNav.addEventListener("click", async () => {
-    if (LaunchManager.isRunning("navigation")) {
+    if (LaunchManager.isRunning("nav_stack") || LaunchManager.isRunning("transform")) {
       _setStatus("Stopping Navigation...");
-      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "navigation" }) });
+      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "nav_stack" }) });
+      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "transform" }) });
       btnNav.classList.remove("active");
       navControls.style.display = "none";
       _updateStepBadge("step2-badge", "None", "");
@@ -372,33 +428,43 @@
       return;
     }
 
-    const mapSelect = document.getElementById("lm-map-select");
-    if (!mapSelect || !mapSelect.value) {
-      _showModeUI("navigation");
-      _setStatus("Select a saved map first, then click Navigation again");
+    _showModeUI("navigation");
+    _setStatus("Starting Navigation...");
+    _lastLaunchedProcess = "nav_stack";
+
+    // Stop conflicting modes
+    for (const proc of ["slam", "navigation", "localization"]) {
+      if (LaunchManager.isRunning(proc)) {
+        await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: proc }) });
+      }
+    }
+
+    // Launch transform.launch first
+    _setStatus("Starting transform...");
+    const trRes = await (await fetch("/api/launch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(_launchBody("transform")),
+    })).json();
+
+    if (!trRes.ok) {
+      _setStatus("Transform failed: " + (trRes.message || trRes.error));
       return;
     }
 
-    _showModeUI("navigation");
-    _setStatus("Starting Navigation...");
-    _lastLaunchedProcess = "navigation";
-
-    if (LaunchManager.isRunning("slam")) {
-      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "slam" }) });
-    }
-
-    const args = [`map:=${mapSelect.value}`];
-    const res = await (await fetch("/api/launch", {
+    // Launch navigation.launch
+    _setStatus("Starting navigation stack...");
+    const navRes = await (await fetch("/api/launch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(_launchBody("navigation", { args })),
+      body: JSON.stringify(_launchBody("nav_stack")),
     })).json();
 
-    if (res.ok) {
+    if (navRes.ok) {
       _updateStepBadge("step2-badge", "Nav", "badge-nav");
-      _setStatus("Navigation started — use controls or click map to navigate");
+      _setStatus("Navigation started (transform + navigation.launch)");
     } else {
-      _setStatus("Nav: " + (res.message || res.error));
+      _setStatus("Navigation: " + (navRes.message || navRes.error));
     }
   });
 
@@ -449,6 +515,10 @@
 
     if (LaunchManager.isRunning("slam")) {
       _updateStepBadge("step2-badge", "FAST-LIO2", "badge-slam");
+    } else if (LaunchManager.isRunning("localization")) {
+      _updateStepBadge("step2-badge", "Localization", "badge-nav");
+    } else if (LaunchManager.isRunning("nav_stack") || LaunchManager.isRunning("transform")) {
+      _updateStepBadge("step2-badge", "Nav", "badge-nav");
     } else if (LaunchManager.isRunning("navigation")) {
       _updateStepBadge("step2-badge", "Nav", "badge-nav");
     }

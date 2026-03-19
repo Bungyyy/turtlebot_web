@@ -99,6 +99,15 @@ LAUNCH_COMMANDS = {
         "use_rviz:=false",
         # map:= argument is appended dynamically
     ],
+    "localization": [
+        "ros2", "launch", "go2_navigation", "localization.launch",
+    ],
+    "transform": [
+        "ros2", "launch", "go2_navigation", "transform.launch",
+    ],
+    "nav_stack": [
+        "ros2", "launch", "go2_navigation", "navigation.launch",
+    ],
 }
 
 
@@ -109,6 +118,10 @@ _KILL_PATTERNS = {
     "slam": ["fastlio_mapping", "fast_lio", "pointcloud_to_laserscan"],
     "navigation": ["bt_navigator", "controller_server", "planner_server",
                     "behavior_server", "lifecycle_manager_navigation"],
+    "localization": ["amcl", "map_server", "lifecycle_manager_localization"],
+    "transform": ["robot_state_publisher", "joint_state_publisher"],
+    "nav_stack": ["bt_navigator", "controller_server", "planner_server",
+                  "behavior_server", "lifecycle_manager_navigation"],
 }
 
 
