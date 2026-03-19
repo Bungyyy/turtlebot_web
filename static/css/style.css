@@ -576,16 +576,6 @@ select.input-sm { cursor: pointer; }
 .dot-orange { background: var(--accent-orange); }
 .dot-purple { background: var(--accent-purple); }
 
-.legend-divider {
-  height: 1px;
-  background: rgba(0,0,0,.12);
-  margin: 6px 0;
-}
-
-.legend-topic-select {
-  padding: 2px 0;
-}
-
 #map-status {
   position: absolute;
   bottom: 8px;
