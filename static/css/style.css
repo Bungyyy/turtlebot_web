@@ -260,6 +260,127 @@ select.input-sm { cursor: pointer; }
 .btn-action.btn-primary:hover { background: #2563eb; }
 .btn-action.active { background: var(--accent-purple); border-color: var(--accent-purple); color: #fff; }
 
+/* ---------- Navigation Control Panel ---------- */
+.card-nav-control .wf-body { padding: 0; }
+
+.nav-mode-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: var(--accent-blue);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  animation: nav-banner-pulse 2s ease-in-out infinite;
+}
+
+.nav-mode-banner.mode-initial {
+  background: var(--accent-orange);
+}
+
+.nav-mode-banner.mode-navigate {
+  background: var(--accent-blue);
+}
+
+@keyframes nav-banner-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.8; }
+}
+
+.btn-mode-cancel {
+  background: rgba(255,255,255,0.25);
+  border: none;
+  color: #fff;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+.btn-mode-cancel:hover { background: rgba(255,255,255,0.4); }
+
+.nav-section {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.nav-section:last-child { border-bottom: none; }
+
+.nav-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.nav-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.nav-coord-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.nav-coord-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-coord-field label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.nav-coord-field input {
+  width: 100%;
+  text-align: center;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+}
+
+.nav-goal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.btn-cancel {
+  background: var(--accent-red) !important;
+  border-color: var(--accent-red) !important;
+  color: #fff !important;
+}
+
+.btn-cancel:hover {
+  background: #dc2626 !important;
+}
+
+.nav-section-utils {
+  padding: 6px 14px 10px;
+  border-bottom: none;
+}
+
+/* Heading arrow preview on map */
+.nav-heading-preview {
+  position: absolute;
+  pointer-events: none;
+  z-index: 20;
+}
+
 /* ---------- Go2 Status Panel ---------- */
 .go2-status-body {
   padding: 8px 14px 10px;

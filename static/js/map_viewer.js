@@ -52,6 +52,11 @@ const MapViewer = (() => {
   let interactionMode = null;
   let activeSubs = [];
 
+  // Drag-to-set-heading state
+  let headingDrag = false;
+  let headingStart = null; // { cx, cy, wx, wy } canvas and world coords of click
+  let headingAngle = 0;    // radians
+
   let mapOriginYaw = 0; // cached yaw of map origin orientation
 
   // ---- Coordinate conversion --------------------------------------------
@@ -778,20 +783,24 @@ const MapViewer = (() => {
   function setMode(mode) {
     interactionMode = mode;
     dragMoved = false;
+    headingDrag = false;
+    headingStart = null;
     canvas.style.cursor = mode ? "crosshair" : "grab";
+    if (!mode) _hideBanner();
   }
+
+  // Track if heading drag just completed (to suppress the click event that follows mouseup)
+  let headingJustCompleted = false;
 
   function _onClick(e) {
     if (dragMoved) { dragMoved = false; return; }
+    if (headingJustCompleted) { headingJustCompleted = false; return; }
     if (!interactionMode) return;
-    // Allow clicks in both map mode and virtual mode (FAST-LIO2)
+    if (headingDrag) return;
     if (!mapData && !robotPose) return;
-    const rect = canvas.getBoundingClientRect();
-    const world = _canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
-    if (interactionMode === "navigate") _sendNavGoal(world.x, world.y);
-    else if (interactionMode === "initial_pose") _sendInitialPose(world.x, world.y);
-    interactionMode = null;
-    canvas.style.cursor = "grab";
+    // Simple click without drag — handled by mouseup for heading drag
+    // This shouldn't normally fire when mousedown starts heading drag,
+    // but keep as safety fallback
   }
 
   function _sendNavGoal(x, y, oz, ow) {
@@ -817,26 +826,123 @@ const MapViewer = (() => {
     _setStatus("Nav goal: (" + x.toFixed(2) + ", " + y.toFixed(2) + ")");
   }
 
-  function _sendInitialPose(x, y) {
+  function _sendInitialPose(x, y, yaw) {
+    const theta = yaw || 0;
+    const oz = Math.sin(theta / 2);
+    const ow = Math.cos(theta / 2);
     RosBridge.publish("/initialpose", "geometry_msgs/msg/PoseWithCovarianceStamped", {
       header: { frame_id: "map" },
-      pose: { pose: { position: { x, y, z: 0 }, orientation: { x:0, y:0, z:0, w:1 } }, covariance: new Array(36).fill(0) },
+      pose: { pose: { position: { x, y, z: 0 }, orientation: { x:0, y:0, z: oz, w: ow } }, covariance: new Array(36).fill(0) },
     });
-    _setStatus("Initial pose set: (" + x.toFixed(2) + ", " + y.toFixed(2) + ")");
+    const deg = (theta * 180 / Math.PI).toFixed(0);
+    _setStatus("Initial pose set: (" + x.toFixed(2) + ", " + y.toFixed(2) + ") " + deg + "\u00b0");
   }
 
   function navigateTo(x, y, oz, ow) { _sendNavGoal(x, y, oz, ow); }
 
+  function cancelNavigation() {
+    // Cancel via action client
+    try {
+      const ac = RosBridge.actionClient("/navigate_to_pose", "nav2_msgs/action/NavigateToPose");
+      ac.cancel();
+    } catch (_) {}
+    // Also publish empty goal to cancel
+    goalPose = null;
+    navPath = [];
+    nav2Status.navActive = false;
+    nav2Status.feedbackActive = false;
+    nav2Status.goalStartTime = 0;
+    _updateNav2UI();
+    _render();
+    _setStatus("Navigation cancelled");
+  }
+
+  // ---- Heading arrow preview --------------------------------------------
+
+  function _drawHeadingArrow(cx, cy, angle) {
+    const len = 40;
+    const endX = cx + len * Math.cos(-angle);
+    const endY = cy + len * Math.sin(-angle); // canvas Y inverted
+    ctx.save();
+    ctx.strokeStyle = "#ff6600";
+    ctx.lineWidth = 3;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+    // Arrowhead
+    const headLen = 10;
+    const a = Math.atan2(endY - cy, endX - cx);
+    ctx.beginPath();
+    ctx.moveTo(endX, endY);
+    ctx.lineTo(endX - headLen * Math.cos(a - 0.4), endY - headLen * Math.sin(a - 0.4));
+    ctx.moveTo(endX, endY);
+    ctx.lineTo(endX - headLen * Math.cos(a + 0.4), endY - headLen * Math.sin(a + 0.4));
+    ctx.stroke();
+    // Circle at origin
+    ctx.beginPath();
+    ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,102,0,0.5)";
+    ctx.fill();
+    ctx.strokeStyle = "#ff6600";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ---- Mode notification callback ---------------------------------------
+  // External code can register a callback to know when a map interaction completes
+
+  let _onModeComplete = null;
+
+  function onModeComplete(cb) { _onModeComplete = cb; }
+
+  function _notifyModeComplete(mode, x, y, yaw) {
+    if (_onModeComplete) _onModeComplete(mode, x, y, yaw);
+  }
+
+  function _hideBanner() {
+    const banner = document.getElementById("nav-mode-banner");
+    if (banner) banner.style.display = "none";
+  }
+
   // ---- Pan & Zoom -------------------------------------------------------
 
   function _onMouseDown(e) {
-    if (interactionMode) return;
+    if (interactionMode) {
+      // Start heading drag: click to place, drag to set heading
+      if (!mapData && !robotPose) return;
+      const rect = canvas.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const world = _canvasToWorld(cx, cy);
+      headingDrag = true;
+      headingStart = { cx, cy, wx: world.x, wy: world.y };
+      headingAngle = 0;
+      e.preventDefault();
+      return;
+    }
     isDragging = true; dragMoved = false;
     dragStart = { x: e.clientX - panX, y: e.clientY - panY };
     canvas.style.cursor = "grabbing";
   }
 
   function _onMouseMove(e) {
+    if (headingDrag && headingStart) {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const dx = mx - headingStart.cx;
+      const dy = -(my - headingStart.cy); // canvas Y is inverted
+      if (Math.sqrt(dx*dx + dy*dy) > 8) {
+        headingAngle = Math.atan2(dy, dx);
+      }
+      _render();
+      // Draw heading arrow preview
+      _drawHeadingArrow(headingStart.cx, headingStart.cy, headingAngle);
+      return;
+    }
     if (!isDragging) return;
     dragMoved = true;
     panX = e.clientX - dragStart.x;
@@ -844,7 +950,40 @@ const MapViewer = (() => {
     _render();
   }
 
-  function _onMouseUp() {
+  function _onMouseUp(e) {
+    if (headingDrag && headingStart) {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const dx = mx - headingStart.cx;
+      const dy = -(my - headingStart.cy);
+      if (Math.sqrt(dx*dx + dy*dy) > 8) {
+        headingAngle = Math.atan2(dy, dx);
+      } else {
+        headingAngle = 0;
+      }
+      const mode = interactionMode;
+      const wx = headingStart.wx, wy = headingStart.wy;
+      const oz = Math.sin(headingAngle / 2);
+      const ow = Math.cos(headingAngle / 2);
+
+      if (mode === "navigate") {
+        _sendNavGoal(wx, wy, oz, ow);
+        _notifyModeComplete("navigate", wx, wy, headingAngle);
+      } else if (mode === "initial_pose") {
+        _sendInitialPose(wx, wy, headingAngle);
+        _notifyModeComplete("initial_pose", wx, wy, headingAngle);
+      }
+
+      headingDrag = false;
+      headingStart = null;
+      headingJustCompleted = true;
+      interactionMode = null;
+      canvas.style.cursor = "grab";
+      _hideBanner();
+      _render();
+      return;
+    }
     isDragging = false;
     if (!interactionMode) canvas.style.cursor = "grab";
   }
@@ -935,5 +1074,7 @@ const MapViewer = (() => {
   function clearScanHistory() { scanHistory = []; scanHistoryDirty = true; _render(); }
 
   return { init, subscribeTopics, setMode, navigateTo, getRobotPose,
-           centerOnRobot: _centerOnRobot, fitMap: _autoFit, clearScanHistory };
+           centerOnRobot: _centerOnRobot, fitMap: _autoFit, clearScanHistory,
+           cancelNavigation, onModeComplete, sendInitialPose: _sendInitialPose,
+           sendNavGoal: _sendNavGoal, getNav2Status: () => nav2Status };
 })();

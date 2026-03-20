@@ -553,19 +553,127 @@
     }
   });
 
-  // ---- STEP 3: Action buttons -------------------------------------------
+  // ---- STEP 3: Navigation controls ----------------------------------------
 
-  document.getElementById("btn-initial-pose").addEventListener("click", () => {
+  const navBanner = document.getElementById("nav-mode-banner");
+  const navBannerText = document.getElementById("nav-mode-banner-text");
+  const navModeBadge = document.getElementById("nav-mode-badge");
+  const btnCancelNav = document.getElementById("btn-cancel-nav");
+
+  function _showNavBanner(mode, text) {
+    navBanner.style.display = "flex";
+    navBanner.className = "nav-mode-banner " + (mode === "initial_pose" ? "mode-initial" : "mode-navigate");
+    navBannerText.textContent = text;
+    navModeBadge.textContent = mode === "initial_pose" ? "Setting Pose" : "Setting Goal";
+    navModeBadge.className = "step-badge " + (mode === "initial_pose" ? "badge-slam" : "badge-nav");
+  }
+
+  function _hideNavBanner() {
+    navBanner.style.display = "none";
+    if (!MapViewer.getNav2Status().navActive) {
+      navModeBadge.textContent = "Idle";
+      navModeBadge.className = "step-badge";
+    }
+  }
+
+  // Cancel mode button in banner
+  document.getElementById("nav-mode-cancel").addEventListener("click", () => {
+    MapViewer.setMode(null);
+    _hideNavBanner();
+    _setStatus("Mode cancelled");
+  });
+
+  // "Click Map" button for initial pose
+  document.getElementById("btn-initial-pose-map").addEventListener("click", () => {
     MapViewer.setMode("initial_pose");
+    _showNavBanner("initial_pose", "Click on map to set initial pose (drag to set heading)");
     _setStatus("Click on the map to set initial pose");
   });
 
-  document.getElementById("btn-navigate").addEventListener("click", () => {
+  // "Click Map" button for navigation goal
+  document.getElementById("btn-navigate-map").addEventListener("click", () => {
     MapViewer.setMode("navigate");
     const navNode = document.getElementById("node-navigation");
     const navOk = navNode && navNode.classList.contains("online");
+    _showNavBanner("navigate", "Click on map to set goal (drag to set heading)");
     _setStatus("Click on the map to set goal" + (navOk ? "" : " (start Navigation first)"));
   });
+
+  // Set Initial Pose from manual inputs
+  document.getElementById("btn-set-initial-pose").addEventListener("click", () => {
+    const x = parseFloat(document.getElementById("init-pose-x").value) || 0;
+    const y = parseFloat(document.getElementById("init-pose-y").value) || 0;
+    const yawDeg = parseFloat(document.getElementById("init-pose-yaw").value) || 0;
+    const yaw = yawDeg * Math.PI / 180;
+    MapViewer.sendInitialPose(x, y, yaw);
+  });
+
+  // Send Navigation Goal from manual inputs
+  document.getElementById("btn-send-nav-goal").addEventListener("click", () => {
+    const x = parseFloat(document.getElementById("nav-goal-x").value) || 0;
+    const y = parseFloat(document.getElementById("nav-goal-y").value) || 0;
+    const yawDeg = parseFloat(document.getElementById("nav-goal-yaw").value) || 0;
+    const yaw = yawDeg * Math.PI / 180;
+    const oz = Math.sin(yaw / 2);
+    const ow = Math.cos(yaw / 2);
+    MapViewer.sendNavGoal(x, y, oz, ow);
+    btnCancelNav.style.display = "block";
+    navModeBadge.textContent = "Navigating";
+    navModeBadge.className = "step-badge badge-nav";
+  });
+
+  // Cancel Navigation
+  btnCancelNav.addEventListener("click", () => {
+    MapViewer.cancelNavigation();
+    btnCancelNav.style.display = "none";
+    navModeBadge.textContent = "Idle";
+    navModeBadge.className = "step-badge";
+  });
+
+  // Use current robot pose as initial pose
+  document.getElementById("btn-use-current-pose").addEventListener("click", () => {
+    const pose = MapViewer.getRobotPose();
+    if (!pose) {
+      _setStatus("No robot pose available");
+      return;
+    }
+    document.getElementById("init-pose-x").value = pose.x.toFixed(2);
+    document.getElementById("init-pose-y").value = pose.y.toFixed(2);
+    document.getElementById("init-pose-yaw").value = (pose.theta * 180 / Math.PI).toFixed(0);
+    _setStatus("Filled initial pose from current robot position");
+  });
+
+  // When a map interaction completes, update the input fields
+  MapViewer.onModeComplete((mode, x, y, yaw) => {
+    const deg = (yaw * 180 / Math.PI).toFixed(0);
+    if (mode === "initial_pose") {
+      document.getElementById("init-pose-x").value = x.toFixed(2);
+      document.getElementById("init-pose-y").value = y.toFixed(2);
+      document.getElementById("init-pose-yaw").value = deg;
+    } else if (mode === "navigate") {
+      document.getElementById("nav-goal-x").value = x.toFixed(2);
+      document.getElementById("nav-goal-y").value = y.toFixed(2);
+      document.getElementById("nav-goal-yaw").value = deg;
+      btnCancelNav.style.display = "block";
+      navModeBadge.textContent = "Navigating";
+      navModeBadge.className = "step-badge badge-nav";
+    }
+    _hideNavBanner();
+  });
+
+  // Update cancel button visibility based on nav2 status
+  setInterval(() => {
+    const status = MapViewer.getNav2Status();
+    if (status.navActive) {
+      btnCancelNav.style.display = "block";
+      navModeBadge.textContent = "Navigating";
+      navModeBadge.className = "step-badge badge-nav";
+    } else if (btnCancelNav.style.display === "block") {
+      btnCancelNav.style.display = "none";
+      navModeBadge.textContent = "Idle";
+      navModeBadge.className = "step-badge";
+    }
+  }, 1000);
 
   // Save map
   document.getElementById("btn-save-map").addEventListener("click", () => {
