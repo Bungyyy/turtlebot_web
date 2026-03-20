@@ -1076,5 +1076,6 @@ const MapViewer = (() => {
   return { init, subscribeTopics, setMode, navigateTo, getRobotPose,
            centerOnRobot: _centerOnRobot, fitMap: _autoFit, clearScanHistory,
            cancelNavigation, onModeComplete, sendInitialPose: _sendInitialPose,
-           sendNavGoal: _sendNavGoal, getNav2Status: () => nav2Status };
+           sendNavGoal: _sendNavGoal, getNav2Status: () => nav2Status,
+           hasMapTopic: () => !!mapData };
 })();
