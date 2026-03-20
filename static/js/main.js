@@ -448,9 +448,12 @@
     }
 
     const locMapSelect = document.getElementById("lm-loc-map-select");
-    if (!locMapSelect || !locMapSelect.value) {
+    const hasLocTopicMap = MapViewer.hasMapTopic();
+    const hasLocSelectedMap = locMapSelect && locMapSelect.value;
+
+    if (!hasLocSelectedMap && !hasLocTopicMap) {
       _showModeUI("localization");
-      _setStatus("Select a saved map first, then click Localization again");
+      _setStatus("Select a saved map first or wait for a map on /map topic");
       return;
     }
 
@@ -475,8 +478,8 @@
       })).json();
     }
 
-    // Launch localization with map
-    const locArgs = [`map:=${locMapSelect.value}`];
+    // Launch localization with map (if selected) or without (using topic map)
+    const locArgs = hasLocSelectedMap ? [`map:=${locMapSelect.value}`] : [];
     const res = await (await fetch("/api/launch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -485,7 +488,7 @@
 
     if (res.ok) {
       _updateStepBadge("step2-badge", "Localization", "badge-nav");
-      _setStatus("Localization started with map");
+      _setStatus(hasLocSelectedMap ? "Localization started with map" : "Localization started (using live map topic)");
     } else {
       _setStatus("Localization: " + (res.message || res.error));
     }
@@ -506,9 +509,12 @@
     }
 
     const mapSelect = document.getElementById("lm-map-select");
-    if (!mapSelect || !mapSelect.value) {
+    const hasTopicMap = MapViewer.hasMapTopic();
+    const hasSelectedMap = mapSelect && mapSelect.value;
+
+    if (!hasSelectedMap && !hasTopicMap) {
       _showModeUI("navigation");
-      _setStatus("Select a saved map first, then click Navigation again");
+      _setStatus("Select a saved map first or wait for a map on /map topic");
       return;
     }
 
@@ -536,9 +542,9 @@
       return;
     }
 
-    // Launch navigation.launch with map
+    // Launch navigation.launch with map (if selected) or without (using topic map)
     _setStatus("Starting navigation stack...");
-    const navArgs = [`map:=${mapSelect.value}`];
+    const navArgs = hasSelectedMap ? [`map:=${mapSelect.value}`] : [];
     const navRes = await (await fetch("/api/launch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -547,7 +553,7 @@
 
     if (navRes.ok) {
       _updateStepBadge("step2-badge", "Nav", "badge-nav");
-      _setStatus("Navigation started with map");
+      _setStatus(hasSelectedMap ? "Navigation started with map" : "Navigation started (using live map topic)");
     } else {
       _setStatus("Navigation: " + (navRes.message || navRes.error));
     }
