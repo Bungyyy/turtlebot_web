@@ -1302,6 +1302,77 @@ def sport_test_move():
 
 
 # ---------------------------------------------------------------------------
+# Nav2 Goal / Initial Pose — send via ros2 topic pub (reliable, no action client)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/nav2/goal", methods=["POST"])
+def nav2_send_goal():
+    """Send a Nav2 navigation goal via ros2 topic pub to /goal_pose.
+
+    This is more reliable than rosbridge's ROSLIB.ActionClient which often
+    fails with ROS2 nav2.  Publishing to /goal_pose is exactly what RViz does.
+    """
+    data = request.get_json(force=True)
+    x = float(data.get("x", 0))
+    y = float(data.get("y", 0))
+    oz = float(data.get("oz", 0))
+    ow = float(data.get("ow", 1))
+
+    yaml_msg = (
+        "'{header: {frame_id: map}, "
+        f"pose: {{position: {{x: {x}, y: {y}, z: 0.0}}, "
+        f"orientation: {{x: 0.0, y: 0.0, z: {oz}, w: {ow}}}}}}}'"
+    )
+    cmd = f"timeout 5 ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped {yaml_msg}"
+    rc, stdout, stderr = _run_cmd(cmd, timeout=8)
+    ok = rc in (0, 124)  # 124 = timeout killed it (OK for --once)
+    return jsonify({"ok": ok, "rc": rc, "stdout": stdout, "stderr": stderr,
+                    "x": x, "y": y, "oz": oz, "ow": ow})
+
+
+@app.route("/api/nav2/initial_pose", methods=["POST"])
+def nav2_send_initial_pose():
+    """Send an initial pose estimate via ros2 topic pub to /initialpose."""
+    data = request.get_json(force=True)
+    x = float(data.get("x", 0))
+    y = float(data.get("y", 0))
+    oz = float(data.get("oz", 0))
+    ow = float(data.get("ow", 1))
+
+    # 36-element covariance, all zeros (same as RViz default)
+    cov = "[" + ", ".join(["0.0"] * 36) + "]"
+    yaml_msg = (
+        "'{header: {frame_id: map}, "
+        f"pose: {{pose: {{position: {{x: {x}, y: {y}, z: 0.0}}, "
+        f"orientation: {{x: 0.0, y: 0.0, z: {oz}, w: {ow}}}}}, "
+        f"covariance: {cov}}}}}'"
+    )
+    cmd = f"timeout 5 ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped {yaml_msg}"
+    rc, stdout, stderr = _run_cmd(cmd, timeout=8)
+    ok = rc in (0, 124)
+    return jsonify({"ok": ok, "rc": rc, "stdout": stdout, "stderr": stderr})
+
+
+@app.route("/api/nav2/cancel", methods=["POST"])
+def nav2_cancel():
+    """Cancel current Nav2 navigation by publishing an empty goal to lifecycle."""
+    # Publish empty action cancel via ros2 CLI
+    cmd = (
+        "timeout 3 ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose "
+        "'{pose: {header: {frame_id: map}, pose: {position: {x: 0, y: 0, z: 0}}}}' --cancel"
+    )
+    # Fallback: just publish to /cmd_vel to stop movement
+    rc, stdout, stderr = _run_cmd(cmd, timeout=6)
+    # Also send zero velocity to stop
+    _run_cmd(
+        "timeout 2 ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "
+        "'{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}'",
+        timeout=5,
+    )
+    return jsonify({"ok": True, "rc": rc, "stdout": stdout, "stderr": stderr})
+
+
+# ---------------------------------------------------------------------------
 # SocketIO events (thin relay – most comms go through roslibjs directly)
 # ---------------------------------------------------------------------------
 

@@ -814,6 +814,31 @@ const MapViewer = (() => {
     nav2Status.recoveries = 0;
     _updateNav2UI();
     _render();
+    _setStatus("Sending nav goal: (" + x.toFixed(2) + ", " + y.toFixed(2) + ")...");
+
+    // Primary: send via backend API (ros2 topic pub — reliable with ROS2 nav2)
+    fetch("/api/nav2/goal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ x, y, oz: oz || 0, ow: ow || 1 }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.ok) {
+          _setStatus("Nav goal sent: (" + x.toFixed(2) + ", " + y.toFixed(2) + ")");
+        } else {
+          console.warn("[MapViewer] Backend nav goal failed, trying rosbridge:", data);
+          _sendNavGoalRosbridge(x, y, oz, ow);
+        }
+      })
+      .catch(() => {
+        console.warn("[MapViewer] Backend unreachable, trying rosbridge");
+        _sendNavGoalRosbridge(x, y, oz, ow);
+      });
+  }
+
+  function _sendNavGoalRosbridge(x, y, oz, ow) {
+    // Fallback: send via rosbridge (may not work with all ROS2 nav2 setups)
     const poseMsg = {
       header: { frame_id: "map", stamp: { sec: 0, nanosec: 0 } },
       pose: { position: { x, y, z: 0 }, orientation: { x: 0, y: 0, z: oz||0, w: ow||1 } },
@@ -823,30 +848,55 @@ const MapViewer = (() => {
       const ac = RosBridge.actionClient("/navigate_to_pose", "nav2_msgs/action/NavigateToPose");
       new ROSLIB.Goal({ actionClient: ac, goalMessage: { pose: poseMsg } }).send();
     } catch (_) {}
-    _setStatus("Nav goal: (" + x.toFixed(2) + ", " + y.toFixed(2) + ")");
+    _setStatus("Nav goal (rosbridge): (" + x.toFixed(2) + ", " + y.toFixed(2) + ")");
   }
 
   function _sendInitialPose(x, y, yaw) {
     const theta = yaw || 0;
     const oz = Math.sin(theta / 2);
     const ow = Math.cos(theta / 2);
+    const deg = (theta * 180 / Math.PI).toFixed(0);
+    _setStatus("Setting initial pose: (" + x.toFixed(2) + ", " + y.toFixed(2) + ") " + deg + "\u00b0...");
+
+    // Primary: send via backend API (ros2 topic pub — reliable)
+    fetch("/api/nav2/initial_pose", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ x, y, oz, ow }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.ok) {
+          _setStatus("Initial pose set: (" + x.toFixed(2) + ", " + y.toFixed(2) + ") " + deg + "\u00b0");
+        } else {
+          console.warn("[MapViewer] Backend initial_pose failed, trying rosbridge:", data);
+          _sendInitialPoseRosbridge(x, y, oz, ow, deg);
+        }
+      })
+      .catch(() => {
+        console.warn("[MapViewer] Backend unreachable, trying rosbridge");
+        _sendInitialPoseRosbridge(x, y, oz, ow, deg);
+      });
+  }
+
+  function _sendInitialPoseRosbridge(x, y, oz, ow, deg) {
     RosBridge.publish("/initialpose", "geometry_msgs/msg/PoseWithCovarianceStamped", {
       header: { frame_id: "map" },
       pose: { pose: { position: { x, y, z: 0 }, orientation: { x:0, y:0, z: oz, w: ow } }, covariance: new Array(36).fill(0) },
     });
-    const deg = (theta * 180 / Math.PI).toFixed(0);
-    _setStatus("Initial pose set: (" + x.toFixed(2) + ", " + y.toFixed(2) + ") " + deg + "\u00b0");
+    _setStatus("Initial pose (rosbridge): (" + x.toFixed(2) + ", " + y.toFixed(2) + ") " + deg + "\u00b0");
   }
 
   function navigateTo(x, y, oz, ow) { _sendNavGoal(x, y, oz, ow); }
 
   function cancelNavigation() {
-    // Cancel via action client
+    // Cancel via backend API (sends zero velocity + action cancel)
+    fetch("/api/nav2/cancel", { method: "POST" }).catch(() => {});
+    // Also try rosbridge action cancel
     try {
       const ac = RosBridge.actionClient("/navigate_to_pose", "nav2_msgs/action/NavigateToPose");
       ac.cancel();
     } catch (_) {}
-    // Also publish empty goal to cancel
     goalPose = null;
     navPath = [];
     nav2Status.navActive = false;
