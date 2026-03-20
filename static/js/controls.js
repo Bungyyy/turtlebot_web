@@ -143,6 +143,10 @@ const Controls = (() => {
     const { vx, vy, vyaw } = currentVel;
     const isMoving = vx !== 0 || vy !== 0 || vyaw !== 0;
 
+    // Only publish when there is actual movement — publishing zeros continuously
+    // overrides nav2 commands and causes the robot to jitter.
+    if (!isMoving) return;
+
     // Publish via rosbridge when connected
     if (cmdVelTopic && RosBridge.isConnected()) {
       cmdVelTopic.publish(new ROSLIB.Message({
@@ -153,10 +157,7 @@ const Controls = (() => {
 
     // ALSO publish via HTTP relay (belt-and-suspenders)
     // The relay runs on the Jetson itself so DDS discovery is guaranteed.
-    // Only send while moving to avoid flooding the relay with zero commands.
-    if (isMoving) {
-      _httpRelaySend(vx, vy, vyaw);
-    }
+    _httpRelaySend(vx, vy, vyaw);
   }
 
   // ---------------------------------------------------------------------------
