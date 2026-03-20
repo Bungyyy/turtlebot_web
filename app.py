@@ -566,6 +566,11 @@ def main():
     def timer_cb():
         vx, vy, vyaw = vel
 
+        # Skip publishing zero velocity — continuous zeros override nav2
+        # and other controllers, causing the robot to jitter.
+        if vx == 0.0 and vy == 0.0 and vyaw == 0.0:
+            return
+
         # 1. Publish Sport API Move (api_id=1008) — primary path for Go2
         if sport_pub:
             try:

@@ -604,6 +604,47 @@ select.input-sm { cursor: pointer; }
 .btn-sport.btn-sport-red { border-color: var(--accent-red); color: var(--accent-red); }
 .btn-sport.btn-sport-red:hover { background: var(--accent-red); color: #fff; }
 
+/* ---------- Teleop Toggle & Disabled State ---------- */
+.card-controls.teleop-disabled > *:not(.card-header) {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+.teleop-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.teleop-toggle input { display: none; }
+.teleop-toggle-slider {
+  width: 32px; height: 16px;
+  background: var(--accent-red);
+  border-radius: 8px;
+  position: relative;
+  transition: background 0.2s;
+}
+.teleop-toggle-slider::after {
+  content: "";
+  position: absolute; top: 2px; left: 2px;
+  width: 12px; height: 12px;
+  background: #fff; border-radius: 50%;
+  transition: transform 0.2s;
+}
+.teleop-toggle input:checked + .teleop-toggle-slider {
+  background: var(--accent-green);
+}
+.teleop-toggle input:checked + .teleop-toggle-slider::after {
+  transform: translateX(16px);
+}
+.teleop-toggle-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  color: var(--text-secondary);
+}
+
 /* ---------- Nav2 Status Panel ---------- */
 .nav2-body { padding: 8px 14px 10px; }
 

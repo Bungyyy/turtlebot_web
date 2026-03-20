@@ -27,6 +27,20 @@
 
   MapViewer.init();
   Controls.init();
+
+  // Teleop enable/disable toggle
+  const teleopToggle = document.getElementById("teleop-enabled");
+  const teleopLabel  = document.getElementById("teleop-toggle-label");
+  if (teleopToggle) {
+    const teleopCard = teleopToggle.closest(".card-controls");
+    teleopToggle.addEventListener("change", () => {
+      const on = teleopToggle.checked;
+      Controls.setEnabled(on);
+      if (teleopLabel) teleopLabel.textContent = on ? "ON" : "OFF";
+      if (teleopCard) teleopCard.classList.toggle("teleop-disabled", !on);
+    });
+  }
+
   Waypoints.init();
   Camera.init();
   LaunchManager.init();

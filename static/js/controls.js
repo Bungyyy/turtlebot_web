@@ -552,5 +552,13 @@ const Controls = (() => {
   // Public API
   // ---------------------------------------------------------------------------
 
-  return { init, start, stop };
+  function setEnabled(on) {
+    enabled = !!on;
+    if (!enabled) {
+      _stop();
+    }
+    console.log(`[Controls] Teleop ${enabled ? "enabled" : "disabled"}`);
+  }
+
+  return { init, start, stop, setEnabled };
 })();
