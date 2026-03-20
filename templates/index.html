@@ -116,13 +116,71 @@
             </div>
           </div>
 
-          <!-- STEP 3: Control -->
-          <div class="card card-workflow">
-            <div class="card-header"><h3>3. Control</h3></div>
+          <!-- STEP 3: Navigation Control -->
+          <div class="card card-workflow card-nav-control">
+            <div class="card-header">
+              <h3>3. Navigation</h3>
+              <span id="nav-mode-badge" class="step-badge">Idle</span>
+            </div>
             <div class="wf-body">
-              <div class="action-buttons">
-                <button id="btn-initial-pose" class="btn-action">Initial Pose</button>
-                <button id="btn-navigate" class="btn-action btn-primary">Navigate</button>
+              <!-- Mode indicator banner -->
+              <div id="nav-mode-banner" class="nav-mode-banner" style="display:none">
+                <span id="nav-mode-banner-text">Click on the map...</span>
+                <button id="nav-mode-cancel" class="btn-mode-cancel">&times;</button>
+              </div>
+
+              <!-- Initial Pose Section -->
+              <div class="nav-section">
+                <div class="nav-section-header">
+                  <span class="nav-section-title">Initial Pose</span>
+                  <button id="btn-initial-pose-map" class="btn-action btn-sm" title="Click on map to set">Click Map</button>
+                </div>
+                <div class="nav-coord-row">
+                  <div class="nav-coord-field">
+                    <label>X</label>
+                    <input type="number" id="init-pose-x" class="input-sm" step="0.1" value="0" />
+                  </div>
+                  <div class="nav-coord-field">
+                    <label>Y</label>
+                    <input type="number" id="init-pose-y" class="input-sm" step="0.1" value="0" />
+                  </div>
+                  <div class="nav-coord-field">
+                    <label>Yaw&deg;</label>
+                    <input type="number" id="init-pose-yaw" class="input-sm" step="5" value="0" />
+                  </div>
+                </div>
+                <button id="btn-set-initial-pose" class="btn-action wf-full">Set Initial Pose</button>
+              </div>
+
+              <!-- Navigation Goal Section -->
+              <div class="nav-section">
+                <div class="nav-section-header">
+                  <span class="nav-section-title">Navigation Goal</span>
+                  <button id="btn-navigate-map" class="btn-action btn-sm btn-primary" title="Click on map to navigate">Click Map</button>
+                </div>
+                <div class="nav-coord-row">
+                  <div class="nav-coord-field">
+                    <label>X</label>
+                    <input type="number" id="nav-goal-x" class="input-sm" step="0.1" value="0" />
+                  </div>
+                  <div class="nav-coord-field">
+                    <label>Y</label>
+                    <input type="number" id="nav-goal-y" class="input-sm" step="0.1" value="0" />
+                  </div>
+                  <div class="nav-coord-field">
+                    <label>Yaw&deg;</label>
+                    <input type="number" id="nav-goal-yaw" class="input-sm" step="5" value="0" />
+                  </div>
+                </div>
+                <div class="nav-goal-actions">
+                  <button id="btn-send-nav-goal" class="btn-action btn-primary wf-full">Navigate to Goal</button>
+                  <button id="btn-cancel-nav" class="btn-action btn-cancel" style="display:none">Cancel Navigation</button>
+                </div>
+              </div>
+
+              <!-- Use current pose button -->
+              <div class="nav-section nav-section-utils">
+                <button id="btn-use-current-pose" class="btn-action btn-sm wf-full" title="Fill initial pose with current robot position">Use Current Pose as Initial</button>
               </div>
             </div>
           </div>
