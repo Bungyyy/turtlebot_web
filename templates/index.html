@@ -253,7 +253,14 @@
 
           <!-- Teleop Controls -->
           <div class="card card-controls">
-            <div class="card-header"><h3>Teleop</h3></div>
+            <div class="card-header">
+              <h3>Teleop</h3>
+              <label class="teleop-toggle" title="Enable/disable teleop publishing">
+                <input type="checkbox" id="teleop-enabled" checked />
+                <span class="teleop-toggle-slider"></span>
+                <span class="teleop-toggle-label" id="teleop-toggle-label">ON</span>
+              </label>
+            </div>
 
             <!-- Speed sliders -->
             <div class="speed-control">
