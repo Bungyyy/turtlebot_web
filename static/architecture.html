@@ -328,7 +328,7 @@
           <span class="sub-comp topic">/plan</span>
           <span class="sub-comp topic">/local_costmap</span>
           <span class="sub-comp topic">/global_costmap</span>
-          <span class="sub-comp topic">/navigate_to_pose/*</span>
+          <span class="sub-comp topic">/robot_pose_map</span>
           <span class="sub-comp topic">/sportmodestate</span>
           <span class="sub-comp topic">/api/sport/request</span>
           <span class="sub-comp topic">/cmd_vel_nav</span>
@@ -521,20 +521,14 @@
       <div style="display:flex; flex-direction:column; gap:10px;">
         <div class="comp-row">
           <div class="comp">
-            <div class="comp-title">Waypoint Follower</div>
-            <div class="comp-detail">Sequential goal execution<br>Map-switch waypoints</div>
-            <div class="sub-comp topic">/navigate_to_pose</div>
+            <div class="comp-title">Waypoint Sequencer</div>
+            <div class="comp-detail">waypoints.js (browser-side)<br>Sequential goal execution<br>Map-switch waypoints</div>
+            <div class="sub-comp topic">/goal_pose (topic pub)</div>
           </div>
           <div class="comp">
             <div class="comp-title">nav2_goal_handler</div>
-            <div class="comp-detail">Custom goal manager<br>Cancel support</div>
-            <div class="sub-comp topic">/nav2_goal_handler/*</div>
-          </div>
-        </div>
-        <div class="comp-row">
-          <div class="comp">
-            <div class="comp-title">BT Navigator Server</div>
-            <div class="comp-detail">Behavior tree executor<br>NavigateToPose action</div>
+            <div class="comp-detail">Lightweight goal manager<br>Replaces bt_navigator<br>(crashes on Jetson)<br>Cancel + feedback</div>
+            <div class="sub-comp topic">/goal_pose<br>/nav2_goal_handler/*</div>
           </div>
         </div>
       </div>
@@ -633,7 +627,7 @@
         <div class="comp-title" style="color:#10b981;">Navigation Path</div>
         <div class="comp-detail" style="text-align:left;">
           Click map → /goal_pose<br>
-          → Nav2 BT Navigator<br>
+          → nav2_goal_handler<br>
           → Planner → Controller<br>
           → /cmd_vel → Robot<br>
           ← /plan, /odom feedback
