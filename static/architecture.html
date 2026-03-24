@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Unitree Go2 Web Teleop — System Architecture</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    background: #f0f2f5;
+    color: #1a1a2e;
+    min-height: 100vh;
+  }
+  .header {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    color: #fff;
+    padding: 18px 40px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .header h1 { font-size: 22px; font-weight: 700; letter-spacing: 1px; }
+  .header .subtitle { font-size: 13px; opacity: 0.7; margin-top: 2px; }
+  .header .badges { display: flex; gap: 10px; }
+  .header .badge {
+    background: rgba(255,255,255,0.15);
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .main-title {
+    text-align: center;
+    padding: 28px 20px 10px;
+    font-size: 28px;
+    font-weight: 800;
+    color: #1a1a2e;
+    letter-spacing: 1px;
+  }
+  .main-subtitle {
+    text-align: center;
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 24px;
+  }
+
+  /* Architecture container */
+  .arch-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 20px 40px;
+  }
+
+  /* Section boxes */
+  .section {
+    border: 2px solid #ccc;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 18px;
+    position: relative;
+    background: #fff;
+  }
+  .section-label {
+    position: absolute;
+    top: -12px;
+    left: 20px;
+    background: #fff;
+    padding: 0 10px;
+    font-size: 15px;
+    font-weight: 700;
+    color: #333;
+    letter-spacing: 0.5px;
+  }
+
+  /* Color-coded sections */
+  .section-browser  { border-color: #3b82f6; }
+  .section-browser .section-label { color: #3b82f6; }
+  .section-flask    { border-color: #10b981; }
+  .section-flask .section-label { color: #10b981; }
+  .section-ros      { border-color: #f59e0b; }
+  .section-ros .section-label { color: #f59e0b; }
+  .section-robot    { border-color: #ef4444; }
+  .section-robot .section-label { color: #ef4444; }
+  .section-nav      { border-color: #8b5cf6; }
+  .section-nav .section-label { color: #8b5cf6; }
+
+  /* Component cards */
+  .comp-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    justify-content: center;
+  }
+  .comp {
+    border: 1.5px solid #ddd;
+    border-radius: 8px;
+    padding: 10px 14px;
+    min-width: 130px;
+    text-align: center;
+    background: #fafbfc;
+    position: relative;
+  }
+  .comp-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #1a1a2e;
+    margin-bottom: 4px;
+  }
+  .comp-detail {
+    font-size: 10px;
+    color: #888;
+    line-height: 1.4;
+  }
+  .comp-highlight {
+    background: #eef2ff;
+    border-color: #3b82f6;
+  }
+
+  /* Sub-component */
+  .sub-comp {
+    background: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 10px;
+    color: #475569;
+    margin-top: 6px;
+    display: inline-block;
+  }
+
+  /* Arrows / flow lines */
+  .flow-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 8px 0;
+    gap: 10px;
+  }
+  .arrow-down {
+    width: 0; height: 0;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-top: 12px solid #94a3b8;
+    margin: 0 auto;
+  }
+  .arrow-up {
+    width: 0; height: 0;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-bottom: 12px solid #94a3b8;
+    margin: 0 auto;
+  }
+  .arrow-bidir {
+    text-align: center;
+    color: #94a3b8;
+    font-size: 20px;
+    font-weight: 700;
+    padding: 4px 0;
+  }
+  .flow-label {
+    font-size: 11px;
+    color: #64748b;
+    font-weight: 600;
+    background: #f0f2f5;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+
+  /* Grid layouts */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .grid-5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  .grid-6 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+
+  /* Topic labels */
+  .topic {
+    font-size: 10px;
+    color: #6366f1;
+    font-family: monospace;
+    font-weight: 600;
+  }
+  .api-label {
+    font-size: 10px;
+    color: #10b981;
+    font-family: monospace;
+    font-weight: 600;
+  }
+
+  /* Inner section */
+  .inner-section {
+    border: 1.5px dashed #ddd;
+    border-radius: 8px;
+    padding: 12px;
+    margin-top: 10px;
+    position: relative;
+  }
+  .inner-label {
+    position: absolute;
+    top: -10px;
+    left: 14px;
+    background: #fff;
+    padding: 0 6px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #888;
+  }
+
+  /* Connection info between sections */
+  .connection-bar {
+    background: linear-gradient(90deg, #e0e7ff, #dbeafe, #e0e7ff);
+    border: 1px solid #93c5fd;
+    border-radius: 8px;
+    padding: 8px 16px;
+    margin: 10px 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  .conn-item {
+    font-size: 11px;
+    font-weight: 600;
+    color: #3b82f6;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .conn-item .proto {
+    background: #3b82f6;
+    color: #fff;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 9px;
+  }
+
+  .footer {
+    text-align: center;
+    padding: 20px;
+    color: #999;
+    font-size: 12px;
+  }
+
+  @media (max-width: 900px) {
+    .grid-4, .grid-5, .grid-6 { grid-template-columns: repeat(2, 1fr); }
+    .grid-3 { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>UNITREE GO2 WEB TELEOP</h1>
+    <div class="subtitle">System Architecture Diagram</div>
+  </div>
+  <div class="badges">
+    <span class="badge">ROS2 Humble</span>
+    <span class="badge">Flask + SocketIO</span>
+    <span class="badge">rosbridge</span>
+    <span class="badge">Nav2</span>
+  </div>
+</div>
+
+<div class="main-title">WEB TELEOP SYSTEM ARCHITECTURE</div>
+<div class="main-subtitle">Browser ↔ Flask Backend ↔ ROS Bridge ↔ ROS2 Ecosystem ↔ Unitree Go2 Robot</div>
+
+<div class="arch-container">
+
+  <!-- ============================================================ -->
+  <!-- BROWSER / FRONTEND -->
+  <!-- ============================================================ -->
+  <div class="section section-browser">
+    <span class="section-label">Browser (Frontend)</span>
+
+    <div style="margin-top:6px; margin-bottom:10px;">
+      <div class="grid-6">
+        <div class="comp comp-highlight">
+          <div class="comp-title">main.js</div>
+          <div class="comp-detail">App Entry Point<br>Module wiring<br>ROS connection<br>Go2 state sub</div>
+        </div>
+        <div class="comp comp-highlight">
+          <div class="comp-title">ros_bridge.js</div>
+          <div class="comp-detail">RosBridge Manager<br>ROSLIB.js wrapper<br>Subscribe / Publish<br>Service calls<br>Action clients</div>
+        </div>
+        <div class="comp comp-highlight">
+          <div class="comp-title">controls.js</div>
+          <div class="comp-detail">Teleop Controls<br>D-pad / Joystick<br>Keyboard (WASD)<br>Gamepad API<br>Sport API cmds<br>Emergency Stop</div>
+        </div>
+        <div class="comp comp-highlight">
+          <div class="comp-title">map_viewer.js</div>
+          <div class="comp-detail">Map Renderer<br>Canvas 2D drawing<br>Robot pose / trail<br>Laser scan overlay<br>Costmap layers<br>Nav2 goal / path<br>Initial pose set</div>
+        </div>
+        <div class="comp comp-highlight">
+          <div class="comp-title">waypoints.js</div>
+          <div class="comp-detail">Waypoint Manager<br>Add / Delete / Play<br>Nav waypoints<br>Map-switch waypoints<br>Go Home</div>
+        </div>
+        <div class="comp comp-highlight">
+          <div class="comp-title">launch_manager.js</div>
+          <div class="comp-detail">Process Manager UI<br>Start/Stop ROS nodes<br>Poll process status<br>Map save trigger</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-2" style="margin-top:8px;">
+      <div class="inner-section">
+        <span class="inner-label">UI Components</span>
+        <div class="comp-row" style="margin-top:6px;">
+          <div class="comp"><div class="comp-title">Camera Viewer</div><div class="comp-detail">camera.js<br>CompressedImage<br>MJPEG stream</div></div>
+          <div class="comp"><div class="comp-title">Map Canvas</div><div class="comp-detail">OccupancyGrid<br>Laser / Costmap<br>Pan / Zoom</div></div>
+          <div class="comp"><div class="comp-title">Teleop Panel</div><div class="comp-detail">D-pad buttons<br>Virtual joystick<br>Speed sliders</div></div>
+          <div class="comp"><div class="comp-title">Mode Selector</div><div class="comp-detail">SLAM / Localization<br>Navigation modes</div></div>
+        </div>
+      </div>
+      <div class="inner-section">
+        <span class="inner-label">ROS Topics (via ROSLIB.js)</span>
+        <div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">
+          <span class="sub-comp topic">/cmd_vel</span>
+          <span class="sub-comp topic">/map</span>
+          <span class="sub-comp topic">/scan</span>
+          <span class="sub-comp topic">/odom</span>
+          <span class="sub-comp topic">/tf</span>
+          <span class="sub-comp topic">/amcl_pose</span>
+          <span class="sub-comp topic">/goal_pose</span>
+          <span class="sub-comp topic">/initialpose</span>
+          <span class="sub-comp topic">/plan</span>
+          <span class="sub-comp topic">/local_costmap</span>
+          <span class="sub-comp topic">/global_costmap</span>
+          <span class="sub-comp topic">/navigate_to_pose/*</span>
+          <span class="sub-comp topic">/sportmodestate</span>
+          <span class="sub-comp topic">/api/sport/request</span>
+          <span class="sub-comp topic">/cmd_vel_nav</span>
+          <span class="sub-comp topic">/nav2_goal_handler/*</span>
+          <span class="sub-comp topic">/camera/compressed</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connection: Browser <-> Flask -->
+  <div class="connection-bar">
+    <div class="conn-item"><span class="proto">HTTP</span> REST API endpoints (/api/*)</div>
+    <div class="conn-item"><span class="proto">WS</span> Flask-SocketIO (event-based)</div>
+    <div class="conn-item"><span class="proto">WS</span> rosbridge WebSocket (port 9090)</div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- FLASK BACKEND -->
+  <!-- ============================================================ -->
+  <div class="section section-flask">
+    <span class="section-label">Flask Backend (app.py)</span>
+
+    <div class="grid-5" style="margin-top:6px;">
+      <div class="comp">
+        <div class="comp-title">Process Manager</div>
+        <div class="comp-detail">Launch/Stop ROS2<br>subprocess.Popen<br>Process groups<br>Log capture</div>
+        <div class="sub-comp api-label">POST /api/launch<br>POST /api/stop<br>GET /api/processes</div>
+      </div>
+      <div class="comp">
+        <div class="comp-title">Map Management</div>
+        <div class="comp-detail">Save maps<br>List maps<br>maps.json config<br>Multi-map support</div>
+        <div class="sub-comp api-label">GET /api/maps<br>POST /api/save_map<br>POST /api/maps/switch</div>
+      </div>
+      <div class="comp">
+        <div class="comp-title">Teleop Relay</div>
+        <div class="comp-detail">SSH fallback<br>Persistent relay<br>/cmd_vel publisher<br>Sport API bridge</div>
+        <div class="sub-comp api-label">POST /api/sport/move<br>POST /api/sport/cmd</div>
+      </div>
+      <div class="comp">
+        <div class="comp-title">Camera Proxy</div>
+        <div class="comp-detail">MJPEG stream<br>Frame proxy</div>
+        <div class="sub-comp api-label">GET /api/camera</div>
+      </div>
+      <div class="comp">
+        <div class="comp-title">Nav2 API</div>
+        <div class="comp-detail">Cancel navigation<br>Goal handler<br>ROS2 topic list</div>
+        <div class="sub-comp api-label">POST /api/nav2/cancel<br>GET /api/ros2/topics</div>
+      </div>
+    </div>
+
+    <div class="inner-section" style="margin-top:12px;">
+      <span class="inner-label">Launch Commands (ROS2 processes managed by backend)</span>
+      <div class="comp-row" style="margin-top:8px;">
+        <div class="comp"><div class="comp-title">rosbridge</div><div class="comp-detail">rosbridge_websocket</div></div>
+        <div class="comp"><div class="comp-title">bringup</div><div class="comp-detail">go2_bringup</div></div>
+        <div class="comp"><div class="comp-title">livox</div><div class="comp-detail">livox_ros_driver2<br>MID360 LiDAR</div></div>
+        <div class="comp"><div class="comp-title">slam</div><div class="comp-detail">FAST-LIO2<br>mapping.launch.py</div></div>
+        <div class="comp"><div class="comp-title">pcl_to_scan</div><div class="comp-detail">pointcloud_to<br>_laserscan</div></div>
+        <div class="comp"><div class="comp-title">localization</div><div class="comp-detail">AMCL + map_server</div></div>
+        <div class="comp"><div class="comp-title">navigation</div><div class="comp-detail">Nav2 stack</div></div>
+        <div class="comp"><div class="comp-title">transform</div><div class="comp-detail">robot_state_pub<br>joint_state_pub</div></div>
+        <div class="comp"><div class="comp-title">goal_handler</div><div class="comp-detail">nav2_goal_handler</div></div>
+      </div>
+    </div>
+
+    <div class="inner-section" style="margin-top:12px;">
+      <span class="inner-label">Deploy Modes</span>
+      <div class="grid-2" style="margin-top:8px;">
+        <div class="comp">
+          <div class="comp-title">Jetson Mode (local)</div>
+          <div class="comp-detail">Flask runs on Jetson<br>All commands local<br>No SSH needed</div>
+        </div>
+        <div class="comp">
+          <div class="comp-title">Remote Mode (SSH)</div>
+          <div class="comp-detail">Flask runs on PC<br>Commands via SSH<br>sshpass to Jetson</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connection: Flask <-> ROS Bridge -->
+  <div class="connection-bar">
+    <div class="conn-item"><span class="proto">WS</span> rosbridge_websocket (port 9090) — ROSLIB.js direct from browser</div>
+    <div class="conn-item"><span class="proto">SSH</span> sshpass relay to Jetson (fallback teleop)</div>
+    <div class="conn-item"><span class="proto">CLI</span> ros2 run / ros2 launch (subprocess)</div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- ROS2 ECOSYSTEM -->
+  <!-- ============================================================ -->
+  <div class="section section-ros">
+    <span class="section-label">ROS2 Ecosystem</span>
+
+    <div class="grid-4" style="margin-top:6px;">
+
+      <!-- Sensor Column -->
+      <div class="inner-section">
+        <span class="inner-label">Sensor</span>
+        <div style="margin-top:8px;">
+          <div class="comp" style="margin-bottom:8px;">
+            <div class="comp-title">3D LiDAR</div>
+            <div class="comp-detail">Livox MID360</div>
+            <div class="sub-comp topic">/livox/lidar<br>/livox/imu</div>
+          </div>
+          <div class="comp" style="margin-bottom:8px;">
+            <div class="comp-title">IMU</div>
+            <div class="comp-detail">Livox MID360</div>
+          </div>
+          <div class="comp">
+            <div class="comp-title">Unitree Go2 Data</div>
+            <div class="comp-detail">Odometry, joint states<br>Battery, mode</div>
+            <div class="sub-comp topic">/odom<br>/sportmodestate</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- External Library Column -->
+      <div class="inner-section">
+        <span class="inner-label">External Library</span>
+        <div style="margin-top:8px;">
+          <div class="comp" style="margin-bottom:8px;">
+            <div class="comp-title">livox_ros_driver_2</div>
+            <div class="comp-detail">LiDAR driver</div>
+            <div class="sub-comp topic">/livox/lidar → /livox/imu</div>
+          </div>
+          <div class="comp" style="margin-bottom:8px;">
+            <div class="comp-title">Modified Go2 Robot Package</div>
+            <div class="comp-detail">go2_bringup<br>go2_teleop</div>
+          </div>
+          <div class="comp">
+            <div class="comp-title">pointcloud_to_laserscan</div>
+            <div class="comp-detail">/cloud_registered → /scan</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Localization Column -->
+      <div class="inner-section">
+        <span class="inner-label">Localization</span>
+        <div style="margin-top:8px;">
+          <div class="comp" style="margin-bottom:8px;">
+            <div class="comp-title">FAST-LIO2</div>
+            <div class="comp-detail">3D SLAM<br>Point cloud mapping</div>
+            <div class="sub-comp topic">/cloud_registered<br>/Odometry (map frame)</div>
+          </div>
+          <div class="comp" style="margin-bottom:8px;">
+            <div class="comp-title">AMCL</div>
+            <div class="comp-detail">2D Localization<br>Particle filter</div>
+            <div class="sub-comp topic">/amcl_pose<br>/particlecloud</div>
+          </div>
+          <div class="comp">
+            <div class="comp-title">map_server</div>
+            <div class="comp-detail">Load/serve maps<br>Hot-swap via service</div>
+            <div class="sub-comp topic">/map<br>/map_server/load_map</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Transform Column -->
+      <div class="inner-section">
+        <span class="inner-label">Transform</span>
+        <div style="margin-top:8px;">
+          <div class="comp" style="margin-bottom:8px;">
+            <div class="comp-title">Robot Localization</div>
+            <div class="comp-detail">EKF filter<br>map→odom TF</div>
+            <div class="sub-comp topic">/odometry/filtered</div>
+          </div>
+          <div class="comp" style="margin-bottom:8px;">
+            <div class="comp-title">point cloud to 2D map</div>
+            <div class="comp-detail">3D → 2D projection</div>
+          </div>
+          <div class="comp">
+            <div class="comp-title">robot_state_publisher</div>
+            <div class="comp-detail">URDF → TF tree</div>
+            <div class="sub-comp topic">/tf /tf_static</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- NAVIGATION -->
+  <!-- ============================================================ -->
+  <div class="section section-nav">
+    <span class="section-label">Navigation (Nav2)</span>
+
+    <div class="grid-2" style="margin-top:6px;">
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <div class="comp-row">
+          <div class="comp">
+            <div class="comp-title">Waypoint Follower</div>
+            <div class="comp-detail">Sequential goal execution<br>Map-switch waypoints</div>
+            <div class="sub-comp topic">/navigate_to_pose</div>
+          </div>
+          <div class="comp">
+            <div class="comp-title">nav2_goal_handler</div>
+            <div class="comp-detail">Custom goal manager<br>Cancel support</div>
+            <div class="sub-comp topic">/nav2_goal_handler/*</div>
+          </div>
+        </div>
+        <div class="comp-row">
+          <div class="comp">
+            <div class="comp-title">BT Navigator Server</div>
+            <div class="comp-detail">Behavior tree executor<br>NavigateToPose action</div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="grid-2">
+          <div class="comp">
+            <div class="comp-title">Planner Server</div>
+            <div class="comp-detail">Global path planning<br>NavFn / Smac</div>
+            <div class="sub-comp topic">/plan</div>
+          </div>
+          <div class="comp">
+            <div class="comp-title">Controller Server</div>
+            <div class="comp-detail">Local trajectory<br>DWB / MPPI</div>
+          </div>
+          <div class="comp">
+            <div class="comp-title">Behavior Server</div>
+            <div class="comp-detail">Recovery behaviors<br>Spin, backup, wait</div>
+          </div>
+          <div class="comp">
+            <div class="comp-title">Smoother Server</div>
+            <div class="comp-detail">Path smoothing</div>
+          </div>
+        </div>
+        <div class="grid-2" style="margin-top:10px;">
+          <div class="comp">
+            <div class="comp-title">Global Costmap</div>
+            <div class="comp-detail">Static + inflation layers</div>
+            <div class="sub-comp topic">/global_costmap/costmap</div>
+          </div>
+          <div class="comp">
+            <div class="comp-title">Local Costmap</div>
+            <div class="comp-detail">Obstacle + sensor layers</div>
+            <div class="sub-comp topic">/local_costmap/costmap</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connection: Nav2 <-> Robot -->
+  <div class="connection-bar">
+    <div class="conn-item"><span class="proto">ROS2</span> /cmd_vel (Twist) — velocity commands</div>
+    <div class="conn-item"><span class="proto">ROS2</span> /api/sport/request — Go2 Sport API (unitree_api/msg/Request)</div>
+    <div class="conn-item"><span class="proto">ROS2</span> /odom — odometry feedback</div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- ROBOT HARDWARE -->
+  <!-- ============================================================ -->
+  <div class="section section-robot">
+    <span class="section-label">Robot Hardware (Unitree Go2 + Jetson)</span>
+
+    <div class="grid-5" style="margin-top:6px;">
+      <div class="comp">
+        <div class="comp-title">Velocity Smoother</div>
+        <div class="comp-detail">Smooth velocity<br>commands to motors</div>
+      </div>
+      <div class="comp">
+        <div class="comp-title">Collision Monitor</div>
+        <div class="comp-detail">Safety layer<br>LiDAR-based</div>
+      </div>
+      <div class="comp">
+        <div class="comp-title">Robot Base</div>
+        <div class="comp-detail">Unitree Go2 MCU<br>Motor controllers<br>12-DOF quadruped</div>
+      </div>
+      <div class="comp">
+        <div class="comp-title">Robot Control</div>
+        <div class="comp-detail">/cmd_vel subscriber<br>Sport API handler<br>Gait controller</div>
+        <div class="sub-comp topic">/cmd_vel<br>/api/sport/request</div>
+      </div>
+      <div class="comp">
+        <div class="comp-title">Jetson (Orin/Nano)</div>
+        <div class="comp-detail">Compute platform<br>Runs ROS2 nodes<br>Flask server<br>SSH target: 192.168.123.18</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- DATA FLOW SUMMARY -->
+  <!-- ============================================================ -->
+  <div class="section" style="border-color: #64748b;">
+    <span class="section-label" style="color: #64748b;">Data Flow Summary</span>
+
+    <div class="grid-3" style="margin-top:8px;">
+      <div class="comp" style="border-left: 3px solid #3b82f6;">
+        <div class="comp-title" style="color:#3b82f6;">Teleop (Primary Path)</div>
+        <div class="comp-detail" style="text-align:left;">
+          Browser D-pad/Keyboard/Gamepad<br>
+          → controls.js<br>
+          → RosBridge.publish()<br>
+          → rosbridge WebSocket<br>
+          → /cmd_vel → Robot
+        </div>
+      </div>
+      <div class="comp" style="border-left: 3px solid #10b981;">
+        <div class="comp-title" style="color:#10b981;">Navigation Path</div>
+        <div class="comp-detail" style="text-align:left;">
+          Click map → /goal_pose<br>
+          → Nav2 BT Navigator<br>
+          → Planner → Controller<br>
+          → /cmd_vel → Robot<br>
+          ← /plan, /odom feedback
+        </div>
+      </div>
+      <div class="comp" style="border-left: 3px solid #f59e0b;">
+        <div class="comp-title" style="color:#f59e0b;">SLAM/Map Path</div>
+        <div class="comp-detail" style="text-align:left;">
+          Livox MID360 → /livox/lidar<br>
+          → FAST-LIO2 → /cloud_registered<br>
+          → pcl_to_scan → /scan<br>
+          → /map (OccupancyGrid)<br>
+          → Browser map_viewer.js
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-3" style="margin-top:10px;">
+      <div class="comp" style="border-left: 3px solid #ef4444;">
+        <div class="comp-title" style="color:#ef4444;">Emergency Stop</div>
+        <div class="comp-detail" style="text-align:left;">
+          Spacebar / Button click<br>
+          → Sport API DAMP (1001)<br>
+          → 10x zero-velocity burst<br>
+          → Cancel Nav2 goals<br>
+          → Clear /cmd_vel_nav
+        </div>
+      </div>
+      <div class="comp" style="border-left: 3px solid #8b5cf6;">
+        <div class="comp-title" style="color:#8b5cf6;">Map Switching</div>
+        <div class="comp-detail" style="text-align:left;">
+          Select map in UI<br>
+          → POST /api/maps/switch<br>
+          → /map_server/load_map srv<br>
+          → Clear costmaps<br>
+          → Set initial pose (AMCL)
+        </div>
+      </div>
+      <div class="comp" style="border-left: 3px solid #06b6d4;">
+        <div class="comp-title" style="color:#06b6d4;">Teleop (SSH Fallback)</div>
+        <div class="comp-detail" style="text-align:left;">
+          Browser → HTTP POST<br>
+          → Flask /api/sport/move<br>
+          → SSH stdin relay script<br>
+          → Jetson ROS2 node<br>
+          → /cmd_vel + /api/sport
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  Unitree Go2 Web Teleop — System Architecture &nbsp;|&nbsp;
+  Flask + ROS2 Humble + Nav2 + FAST-LIO2 + rosbridge &nbsp;|&nbsp;
+  School of Engineering, KMITL — AIMs Lab
+</div>
+
+</body>
+</html>
