@@ -1,0 +1,15 @@
+{
+  "active_map": "default",
+  "maps": {
+    "default": {
+      "name": "Default Map",
+      "yaml_path": "/home/unitree/go2_ws/map/map.yaml",
+      "initial_pose": {
+        "x": -0.3,
+        "y": -0.8,
+        "yaw": -1.57
+      },
+      "waypoints": []
+    }
+  }
+}

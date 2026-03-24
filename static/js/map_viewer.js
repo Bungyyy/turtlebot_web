@@ -14,9 +14,22 @@ const MapViewer = (() => {
   let mapData = null;
   let mapImage = null;
   let robotPose = null;       // { x, y, theta } in MAP frame
+
+  // Persistent publishers for nav2 — pre-advertised so DDS discovery
+  // completes before the user clicks.  Without this, the first publish
+  // is lost because Nav2's subscriber hasn't discovered us yet.
+  let goalPosePub = null;     // /goal_pose  PoseStamped
+  let initialPosePub = null;  // /initialpose PoseWithCovarianceStamped
+  let navActionClient = null; // reusable action client for /navigate_to_pose
   let odomPose = null;        // { x, y, theta } in ODOM frame
+  let lastRenderedPose = null; // for jitter suppression
   let hasAmcl = false;
   let tfMapToOdom = null;     // { x, y, theta }
+  let tfFromTopic = false;    // true when TF came from /tf topic (authoritative)
+  let tfFromUser = false;     // true when user set initial pose — overrides /tf
+  let initialPoseSetTime = 0; // timestamp when user last set initial pose
+  let pendingInitialPose = null; // stored when user sets initial pose before odom arrives
+  let hasMapFrameOdom = false; // true when a map-frame odom source (FAST-LIO2) is active
   let goalPose = null;
   let homePose = { x: 0, y: 0 };
 
@@ -147,7 +160,20 @@ const MapViewer = (() => {
   function subscribeTopics() {
     activeSubs.forEach((t) => { try { t.unsubscribe(); } catch (_) {} });
     activeSubs = [];
+    hasMapFrameOdom = false;
+    tfFromTopic = false;
+    navActionClient = null;
     console.log("[MapViewer] Subscribing to topics...");
+
+    // Pre-advertise nav2 topics so DDS discovery happens NOW, not when
+    // the user first clicks "Navigate".  On CycloneDDS discovery takes
+    // 1-5 s — by the time the user actually sends a goal the subscriber
+    // (bt_navigator / amcl) will have already discovered us.
+    goalPosePub = RosBridge.advertise("/goal_pose", "geometry_msgs/msg/PoseStamped");
+    initialPosePub = RosBridge.advertise("/initialpose", "geometry_msgs/msg/PoseWithCovarianceStamped");
+    // lidar_localization_ros2 expects PoseStamped on /initialpose (different type!)
+    const initialPoseStampedPub = RosBridge.advertise("/initialpose", "geometry_msgs/msg/PoseStamped");
+    console.log("[MapViewer] Pre-advertised /goal_pose and /initialpose for nav2");
 
     // OccupancyGrid
     activeSubs.push(RosBridge.subscribe("/map", "nav_msgs/msg/OccupancyGrid", (msg) => {
@@ -164,6 +190,96 @@ const MapViewer = (() => {
       document.getElementById("map-size").textContent = "Size: " + msg.info.width + "x" + msg.info.height;
     }, { throttle: 2000 }));
 
+    // Robot pose from nav2_goal_handler (if running) — uses ROS2 TF tree
+    let robotPoseMapCount = 0;
+    activeSubs.push(RosBridge.subscribe("/robot_pose_map", "geometry_msgs/msg/PoseStamped", (msg) => {
+      const p = msg.pose;
+      const mapPose = { x: p.position.x, y: p.position.y, theta: _qToYaw(p.orientation) };
+      if (robotPoseMapCount++ === 0) console.log("[MapViewer] First /robot_pose_map:", mapPose.x.toFixed(3), mapPose.y.toFixed(3));
+      // When /pcl_pose (localization) is active, only use that
+      if (pclPoseCount > 0) return;
+      // When user set initial pose, apply their TF offset instead of using raw goal handler pose
+      if (tfFromUser && odomPose) {
+        robotPose = _odomToMap(odomPose);
+      } else {
+        robotPose = mapPose;
+      }
+      if (odomPose && !tfFromTopic && !tfFromUser) {
+        const dtheta = mapPose.theta - odomPose.theta;
+        const c = Math.cos(dtheta), s = Math.sin(dtheta);
+        tfMapToOdom = {
+          x: mapPose.x - (c * odomPose.x - s * odomPose.y),
+          y: mapPose.y - (s * odomPose.x + c * odomPose.y),
+          theta: dtheta,
+        };
+      }
+      if (_poseChanged(robotPose)) {
+        _pushTrail(robotPose);
+        _updatePoseUI(p);
+        _render();
+      }
+    }, { throttle: 200 }));
+
+    // Go2 built-in LiDAR odometry — direct via rosbridge (most reliable)
+    // Published in 'odom' frame; without localization, odom ≈ map
+    let utlidarCount = 0;
+    activeSubs.push(RosBridge.subscribe("/utlidar/robot_pose", "geometry_msgs/msg/PoseStamped", (msg) => {
+      const p = msg.pose;
+      const pose = { x: p.position.x, y: p.position.y, theta: _qToYaw(p.orientation) };
+      if (utlidarCount++ === 0) console.log("[MapViewer] First /utlidar/robot_pose:", pose.x.toFixed(3), pose.y.toFixed(3));
+      odomPose = pose; // always update odomPose for TF derivation
+      // When /pcl_pose (localization) is active, it's the sole position source
+      if (pclPoseCount > 0) return;
+      if (tfFromUser && tfMapToOdom) {
+        robotPose = _odomToMap(pose);
+      } else if (!tfFromTopic && robotPoseMapCount === 0) {
+        // No TF from /tf topic and no /robot_pose_map — use utlidar directly
+        robotPose = tfMapToOdom ? _odomToMap(pose) : pose;
+        if (_poseChanged(robotPose)) {
+          _pushTrail(robotPose);
+          _updatePoseUI(p);
+          _render();
+        }
+      }
+    }, { throttle: 100 }));
+
+    // LiDAR localization pose (/pcl_pose in MAP frame) — most reliable source
+    let pclPoseCount = 0;
+    activeSubs.push(RosBridge.subscribe("/pcl_pose", "geometry_msgs/msg/PoseWithCovarianceStamped", (msg) => {
+      const p = msg.pose.pose;
+      const mapPose = { x: p.position.x, y: p.position.y, theta: _qToYaw(p.orientation) };
+      hasAmcl = true; // treat as localization active
+      nav2Status.locActive = true;
+      _updateNav2UI();
+      if (pclPoseCount++ < 5) {
+        console.log("[MapViewer] /pcl_pose (map frame):", mapPose.x.toFixed(3), mapPose.y.toFixed(3));
+      }
+      // After user sets initial pose, suppress /pcl_pose for 5s to let localization converge
+      if (initialPoseSetTime > 0 && (Date.now() - initialPoseSetTime) < 5000) {
+        return; // wait for localization to process the new initial pose
+      }
+      if (initialPoseSetTime > 0 && (Date.now() - initialPoseSetTime) >= 5000) {
+        initialPoseSetTime = 0; // suppression period over, accept /pcl_pose again
+        tfFromUser = false; // localization is authoritative now
+        console.log("[MapViewer] /pcl_pose suppression ended, localization is authoritative");
+      }
+      // This is authoritative — directly set robot position in map frame
+      robotPose = mapPose;
+      // Derive map->odom TF for costmap rendering
+      if (odomPose) {
+        const dtheta = mapPose.theta - odomPose.theta;
+        const c = Math.cos(dtheta), s = Math.sin(dtheta);
+        tfMapToOdom = {
+          x: mapPose.x - (c * odomPose.x - s * odomPose.y),
+          y: mapPose.y - (s * odomPose.x + c * odomPose.y),
+          theta: dtheta,
+        };
+        tfFromTopic = true;
+      }
+      _pushTrail(robotPose);
+      _render();
+    }, { throttle: 200 }));
+
     // AMCL pose (MAP frame) – used as fallback when TF not available
     let amclCount = 0;
     activeSubs.push(RosBridge.subscribe("/amcl_pose", "geometry_msgs/msg/PoseWithCovarianceStamped", (msg) => {
@@ -172,6 +288,7 @@ const MapViewer = (() => {
       hasAmcl = true;
       nav2Status.locActive = true;
       _updateNav2UI();
+      if (pclPoseCount > 0) return; // localization active, use /pcl_pose only
       if (amclCount++ < 5) {
         console.log("[MapViewer] AMCL pose:", amclPose.x.toFixed(3), amclPose.y.toFixed(3),
           "theta:", (amclPose.theta * 180 / Math.PI).toFixed(1) + "°",
@@ -187,21 +304,41 @@ const MapViewer = (() => {
       }
     }, { throttle: 100 }));
 
-    // Odom (ODOM frame) – primary pose source when combined with TF
+    // Odom – pose source. frame_id determines how we use it:
+    //   "map" / "camera_init" → already in map frame (FAST-LIO2 SLAM)
+    //   "odom" / anything else → needs map->odom TF to place on map
     let odomCount = 0;
+    const MAP_FRAME_IDS = new Set(["map", "camera_init", "camera_init_frd"]);
+
     const _onOdom = (msg) => {
-      if (odomCount++ === 0) console.log("[MapViewer] First odom received from:", msg._topic || "odom");
-      const p = msg.pose.pose;
-      odomPose = { x: p.position.x, y: p.position.y, theta: _qToYaw(p.orientation) };
-      // Always use odom+TF when TF available – this is always consistent
-      // with whatever published the map (cartographer or map_server)
-      if (tfMapToOdom) {
-        robotPose = _odomToMap(odomPose);
-      } else if (!hasAmcl) {
-        robotPose = odomPose; // raw odom fallback
+      // Skip when higher-priority sources are active
+      if (pclPoseCount > 0 || robotPoseMapCount > 0 || utlidarCount > 0) {
+        // Still update odomPose for TF derivation, but don't touch robotPose
+        const p = msg.pose.pose;
+        odomPose = { x: p.position.x, y: p.position.y, theta: _qToYaw(p.orientation) };
+        return;
       }
-      if (robotPose) {
-        // Auto-center virtual view on first pose when no map exists
+      const frameId = ((msg.header && msg.header.frame_id) || "").replace(/^\//, "");
+      const isMapFrame = MAP_FRAME_IDS.has(frameId);
+      if (odomCount++ === 0) console.log("[MapViewer] First odom received from:", msg._topic || "odom", "frame:", frameId);
+
+      const p = msg.pose.pose;
+      const pose = { x: p.position.x, y: p.position.y, theta: _qToYaw(p.orientation) };
+
+      if (isMapFrame) {
+        hasMapFrameOdom = true;
+        robotPose = pose;
+        odomPose = pose;
+      } else {
+        odomPose = pose;
+        if (hasMapFrameOdom) return;
+        if (tfMapToOdom) {
+          robotPose = _odomToMap(odomPose);
+        } else if (!hasAmcl) {
+          robotPose = odomPose;
+        }
+      }
+      if (robotPose && _poseChanged(robotPose)) {
         if (!mapData && !virtualCentered && canvas) {
           virtualCentered = true;
           panX = canvas.width / 2 - robotPose.x * VIRTUAL_PPM * scale;
@@ -211,7 +348,8 @@ const MapViewer = (() => {
         _render();
       }
     };
-    // Subscribe to standard /odom and FAST-LIO's /Odometry topic
+    // Subscribe to odometry topics: EKF filtered, standard /odom, FAST-LIO /Odometry
+    activeSubs.push(RosBridge.subscribe("/odometry/filtered", "nav_msgs/msg/Odometry", _onOdom, { throttle: 50 }));
     activeSubs.push(RosBridge.subscribe("/odom", "nav_msgs/msg/Odometry", _onOdom, { throttle: 50 }));
     activeSubs.push(RosBridge.subscribe("/Odometry", "nav_msgs/msg/Odometry", _onOdom, { throttle: 50 }));
 
@@ -223,10 +361,13 @@ const MapViewer = (() => {
         const child = (t.child_frame_id || "").replace(/^\//, "");
         if (parent === "map" && child === "odom") {
           const tr = t.transform;
+          // Localization TF always wins — clear user override
+          if (tfFromUser) { tfFromUser = false; console.log("[MapViewer] Localization TF received, clearing user override"); }
           tfMapToOdom = {
             x: tr.translation.x, y: tr.translation.y,
             theta: _qToYaw(tr.rotation),
           };
+          tfFromTopic = true;
           if (tfCount++ === 0) console.log("[MapViewer] First map->odom TF:", tfMapToOdom);
           if (odomPose) {
             robotPose = _odomToMap(odomPose);
@@ -267,7 +408,7 @@ const MapViewer = (() => {
     activeSubs.push(RosBridge.subscribe("/local_costmap/costmap", "nav_msgs/msg/OccupancyGrid", (msg) => {
       costmapData = msg;
       costmapImage = _buildCostmapImage(msg);
-      if (!tfMapToOdom && !hasAmcl && msg.info) {
+      if (!tfMapToOdom && !hasAmcl && !hasMapFrameOdom && msg.info) {
         const cx = msg.info.origin.position.x + (msg.info.width * msg.info.resolution) / 2;
         const cy = msg.info.origin.position.y + (msg.info.height * msg.info.resolution) / 2;
         robotPose = { x: cx, y: cy, theta: robotPose ? robotPose.theta : 0 };
@@ -309,6 +450,31 @@ const MapViewer = (() => {
       if (nav2Status.goalStartTime > 0) {
         nav2Status.timeTaken = (Date.now() - nav2Status.goalStartTime) / 1000;
       }
+      // Use current_pose from nav2 feedback (always in map frame) to fix
+      // robot position when map->odom TF is missing (localization inactive)
+      if (fb.current_pose && fb.current_pose.pose) {
+        const p = fb.current_pose.pose;
+        const mapPose = { x: p.position.x, y: p.position.y, theta: _qToYaw(p.orientation) };
+        // Derive map->odom TF from feedback pose and current odom pose
+        // Keep updating when TF is not from /tf topic (feedback-derived drifts)
+        if (odomPose && !tfFromTopic) {
+          const dtheta = mapPose.theta - odomPose.theta;
+          const c = Math.cos(dtheta), s = Math.sin(dtheta);
+          const derived = {
+            x: mapPose.x - (c * odomPose.x - s * odomPose.y),
+            y: mapPose.y - (s * odomPose.x + c * odomPose.y),
+            theta: dtheta,
+          };
+          if (!tfMapToOdom) console.log("[MapViewer] Derived map->odom TF from nav2 feedback:", derived);
+          tfMapToOdom = derived;
+        }
+        // Use feedback pose directly when no authoritative TF from /tf topic
+        if (!tfFromTopic) {
+          robotPose = mapPose;
+          _pushTrail(robotPose);
+          _render();
+        }
+      }
       _updateNav2UI();
     }, { throttle: 500 }));
 
@@ -319,12 +485,34 @@ const MapViewer = (() => {
     }, { throttle: 2000 }));
   }
 
+  // ---- Pose jitter filter ------------------------------------------------
+  // Returns true if pose moved enough to re-render (> 2cm or 1°)
+  function _poseChanged(pose) {
+    if (!lastRenderedPose) { lastRenderedPose = pose; return true; }
+    const dx = pose.x - lastRenderedPose.x, dy = pose.y - lastRenderedPose.y;
+    const da = Math.abs(pose.theta - lastRenderedPose.theta);
+    if (dx * dx + dy * dy > 0.0025 || da > 0.035) { // 5cm or ~2°
+      lastRenderedPose = pose;
+      return true;
+    }
+    return false;
+  }
+
   // ---- Odom trail -------------------------------------------------------
 
   function _pushTrail(pose) {
     if (!pose) return;
     const now = Date.now();
     if (now - lastTrailTime < 80) return;
+    if (odomTrail.length > 0) {
+      const prev = odomTrail[odomTrail.length - 1];
+      const dx = pose.x - prev.x, dy = pose.y - prev.y;
+      const dist2 = dx * dx + dy * dy;
+      // Skip large jumps (> 1m) — caused by frame switches
+      if (dist2 > 1.0) { odomTrail = []; }
+      // Skip tiny jitter (< 3cm) — sensor noise when stationary
+      else if (dist2 < 0.001) return;
+    }
     lastTrailTime = now;
     odomTrail.push({ x: pose.x, y: pose.y, t: now });
     if (odomTrail.length > TRAIL_MAX) odomTrail.shift();
@@ -557,7 +745,7 @@ const MapViewer = (() => {
 
     // 11. Debug: show robot world coords on canvas
     if (robotPose) {
-      const src = tfMapToOdom ? "odom+TF" : (hasAmcl ? "AMCL" : "odom");
+      const src = hasMapFrameOdom ? "SLAM" : (tfMapToOdom ? "odom+TF" : (hasAmcl ? "AMCL" : "odom"));
       const dbg = src + " (" + robotPose.x.toFixed(2) + ", " + robotPose.y.toFixed(2) + ") " +
                   (robotPose.theta * 180 / Math.PI).toFixed(0) + "\u00b0";
       ctx.save();
@@ -577,7 +765,7 @@ const MapViewer = (() => {
       ctx.font = "bold 11px monospace";
       const scanInfo = scanHistory.length > 0 ? " | Scan pts: " + scanHistory.length : "";
       ctx.fillText("FAST-LIO2 mode (laser + odom)" + scanInfo, 10, H - 30);
-    } else if (!tfMapToOdom && !hasAmcl && odomPose && hasMap) {
+    } else if (!tfMapToOdom && !hasAmcl && !hasMapFrameOdom && odomPose && hasMap) {
       ctx.fillStyle = "rgba(180,80,0,0.9)";
       ctx.font = "bold 11px monospace";
       ctx.fillText("No map\u2192odom TF \u2014 robot position approximate", 10, H - 30);
@@ -803,6 +991,12 @@ const MapViewer = (() => {
     // but keep as safety fallback
   }
 
+  /** Build a ROS2 timestamp from the current time. */
+  function _rosStamp() {
+    const ms = Date.now();
+    return { sec: Math.floor(ms / 1000), nanosec: (ms % 1000) * 1000000 };
+  }
+
   function _sendNavGoal(x, y, oz, ow) {
     goalPose = { x, y };
     nav2Status.goalStartTime = Date.now();
@@ -816,39 +1010,37 @@ const MapViewer = (() => {
     _render();
     _setStatus("Sending nav goal: (" + x.toFixed(2) + ", " + y.toFixed(2) + ")...");
 
-    // Primary: send via backend API (ros2 topic pub — reliable with ROS2 nav2)
-    fetch("/api/nav2/goal", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ x, y, oz: oz || 0, ow: ow || 1 }),
-    })
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.ok) {
-          _setStatus("Nav goal sent: (" + x.toFixed(2) + ", " + y.toFixed(2) + ")");
-        } else {
-          console.warn("[MapViewer] Backend nav goal failed, trying rosbridge:", data);
-          _sendNavGoalRosbridge(x, y, oz, ow);
-        }
-      })
-      .catch(() => {
-        console.warn("[MapViewer] Backend unreachable, trying rosbridge");
-        _sendNavGoalRosbridge(x, y, oz, ow);
+    // Send goal via ONE channel only — multiple channels cause the goal_handler
+    // to receive duplicates, cancel/restart in a loop, and abort (status 6).
+    // Prefer rosbridge publisher (pre-advertised, low latency).
+    // Fall back to backend API if rosbridge is not connected.
+    if (goalPosePub && RosBridge.isConnected()) {
+      const msg = new ROSLIB.Message({
+        header: { frame_id: "map", stamp: _rosStamp() },
+        pose: { position: { x, y, z: 0 }, orientation: { x: 0, y: 0, z: oz || 0, w: ow || 1 } },
       });
-  }
-
-  function _sendNavGoalRosbridge(x, y, oz, ow) {
-    // Fallback: send via rosbridge (may not work with all ROS2 nav2 setups)
-    const poseMsg = {
-      header: { frame_id: "map", stamp: { sec: 0, nanosec: 0 } },
-      pose: { position: { x, y, z: 0 }, orientation: { x: 0, y: 0, z: oz||0, w: ow||1 } },
-    };
-    RosBridge.publish("/goal_pose", "geometry_msgs/msg/PoseStamped", poseMsg);
-    try {
-      const ac = RosBridge.actionClient("/navigate_to_pose", "nav2_msgs/action/NavigateToPose");
-      new ROSLIB.Goal({ actionClient: ac, goalMessage: { pose: poseMsg } }).send();
-    } catch (_) {}
-    _setStatus("Nav goal (rosbridge): (" + x.toFixed(2) + ", " + y.toFixed(2) + ")");
+      goalPosePub.publish(msg);
+      console.log("[MapViewer] Nav goal published via rosbridge");
+      _setStatus("Nav goal sent: (" + x.toFixed(2) + ", " + y.toFixed(2) + ")");
+    } else {
+      // Fallback: backend API (spawns rclpy publisher)
+      fetch("/api/nav2/goal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ x, y, oz: oz || 0, ow: ow || 1 }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.ok) {
+            console.log("[MapViewer] Backend nav goal confirmed OK");
+            _setStatus("Nav goal sent: (" + x.toFixed(2) + ", " + y.toFixed(2) + ")");
+          } else {
+            console.warn("[MapViewer] Backend nav goal failed:", data);
+            _setStatus("Nav goal failed — check logs");
+          }
+        })
+        .catch(() => { _setStatus("Nav goal failed — backend error"); });
+    }
   }
 
   function _sendInitialPose(x, y, yaw) {
@@ -858,7 +1050,68 @@ const MapViewer = (() => {
     const deg = (theta * 180 / Math.PI).toFixed(0);
     _setStatus("Setting initial pose: (" + x.toFixed(2) + ", " + y.toFixed(2) + ") " + deg + "\u00b0...");
 
-    // Primary: send via backend API (ros2 topic pub — reliable)
+    // Compute the offset between where the user says the robot IS (map frame)
+    // and where the web currently shows it (raw odom/utlidar frame).
+    // This works regardless of which odom source is active.
+    const mapPose = { x, y, theta };
+    tfFromUser = true; // prevent /tf and /robot_pose_map from overwriting
+    initialPoseSetTime = Date.now(); // suppress /pcl_pose for 5s while localization converges
+    // Use ANY available raw pose source: odomPose, or current robotPose as fallback
+    const rawPose = odomPose || robotPose || { x: 0, y: 0, theta: 0 };
+    const dtheta = mapPose.theta - rawPose.theta;
+    const c = Math.cos(dtheta), s = Math.sin(dtheta);
+    tfMapToOdom = {
+      x: mapPose.x - (c * rawPose.x - s * rawPose.y),
+      y: mapPose.y - (s * rawPose.x + c * rawPose.y),
+      theta: dtheta,
+    };
+    console.log("[MapViewer] Initial pose TF computed. raw:", rawPose, "-> map:", mapPose, "TF:", tfMapToOdom);
+
+    // ---- Publish map->odom TF to ROS so nav2 costmaps/planner work ----
+    const tfQz = Math.sin(tfMapToOdom.theta / 2);
+    const tfQw = Math.cos(tfMapToOdom.theta / 2);
+    fetch("/api/nav2/set_map_odom_tf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ x: tfMapToOdom.x, y: tfMapToOdom.y, qz: tfQz, qw: tfQw }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.ok) console.log("[MapViewer] map->odom TF published to ROS");
+        else console.warn("[MapViewer] Failed to publish map->odom TF:", data);
+      })
+      .catch((e) => console.warn("[MapViewer] map->odom TF API error:", e));
+
+    // Immediately update robot position to the user-specified location
+    robotPose = mapPose;
+    lastRenderedPose = null; // force re-render
+    odomTrail = []; // clear trail since position jumped
+    _pushTrail(robotPose);
+    _render();
+
+    // ---- Primary: rosbridge publishers ----
+    if (RosBridge.isConnected()) {
+      // PoseWithCovarianceStamped for AMCL
+      if (initialPosePub) {
+        initialPosePub.publish(new ROSLIB.Message({
+          header: { frame_id: "map", stamp: _rosStamp() },
+          pose: {
+            pose: { position: { x, y, z: 0 }, orientation: { x: 0, y: 0, z: oz, w: ow } },
+            covariance: new Array(36).fill(0),
+          },
+        }));
+      }
+      // PoseStamped for lidar_localization_ros2
+      const psPub = RosBridge.advertise("/initialpose", "geometry_msgs/msg/PoseStamped");
+      psPub.publish(new ROSLIB.Message({
+        header: { frame_id: "map", stamp: _rosStamp() },
+        pose: { position: { x, y, z: 0 }, orientation: { x: 0, y: 0, z: oz, w: ow } },
+      }));
+      console.log("[MapViewer] Initial pose published (both PoseStamped + PoseWithCovarianceStamped)");
+      _setStatus("Initial pose set: (" + x.toFixed(2) + ", " + y.toFixed(2) + ") " + deg + "\u00b0");
+    }
+
+    // ---- Secondary: backend API ----
     fetch("/api/nav2/initial_pose", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -867,36 +1120,25 @@ const MapViewer = (() => {
       .then((r) => r.json())
       .then((data) => {
         if (data.ok) {
-          _setStatus("Initial pose set: (" + x.toFixed(2) + ", " + y.toFixed(2) + ") " + deg + "\u00b0");
+          console.log("[MapViewer] Backend initial_pose also confirmed OK");
         } else {
-          console.warn("[MapViewer] Backend initial_pose failed, trying rosbridge:", data);
-          _sendInitialPoseRosbridge(x, y, oz, ow, deg);
+          console.warn("[MapViewer] Backend initial_pose failed:", data);
         }
       })
-      .catch(() => {
-        console.warn("[MapViewer] Backend unreachable, trying rosbridge");
-        _sendInitialPoseRosbridge(x, y, oz, ow, deg);
-      });
-  }
-
-  function _sendInitialPoseRosbridge(x, y, oz, ow, deg) {
-    RosBridge.publish("/initialpose", "geometry_msgs/msg/PoseWithCovarianceStamped", {
-      header: { frame_id: "map" },
-      pose: { pose: { position: { x, y, z: 0 }, orientation: { x:0, y:0, z: oz, w: ow } }, covariance: new Array(36).fill(0) },
-    });
-    _setStatus("Initial pose (rosbridge): (" + x.toFixed(2) + ", " + y.toFixed(2) + ") " + deg + "\u00b0");
+      .catch(() => {});
   }
 
   function navigateTo(x, y, oz, ow) { _sendNavGoal(x, y, oz, ow); }
 
   function cancelNavigation() {
-    // Cancel via backend API (sends zero velocity + action cancel)
-    fetch("/api/nav2/cancel", { method: "POST" }).catch(() => {});
-    // Also try rosbridge action cancel
+    // Cancel goal handler directly via rosbridge (fastest)
     try {
-      const ac = RosBridge.actionClient("/navigate_to_pose", "nav2_msgs/action/NavigateToPose");
-      ac.cancel();
+      const cancelPub = RosBridge.advertise("/nav2_goal_handler/cancel", "geometry_msgs/msg/PoseStamped");
+      cancelPub.publish(new ROSLIB.Message({ header: { frame_id: "map" }, pose: {} }));
+      console.log("[MapViewer] Sent cancel to goal handler");
     } catch (_) {}
+    // Also cancel via backend API (sends zero velocity + goal handler cancel)
+    fetch("/api/nav2/cancel", { method: "POST" }).catch(() => {});
     goalPose = null;
     navPath = [];
     nav2Status.navActive = false;
@@ -1018,7 +1260,10 @@ const MapViewer = (() => {
       const ow = Math.cos(headingAngle / 2);
 
       if (mode === "navigate") {
-        _sendNavGoal(wx, wy, oz, ow);
+        // Just set the goal marker and populate fields — user confirms with "Navigate to Goal" button
+        goalPose = { x: wx, y: wy };
+        _render();
+        _setStatus("Goal set: (" + wx.toFixed(2) + ", " + wy.toFixed(2) + ") — click Navigate to Goal to start");
         _notifyModeComplete("navigate", wx, wy, headingAngle);
       } else if (mode === "initial_pose") {
         _sendInitialPose(wx, wy, headingAngle);

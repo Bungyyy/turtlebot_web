@@ -113,13 +113,22 @@ LAUNCH_COMMANDS = {
         # map:= argument is appended dynamically
     ],
     "localization": [
-        "ros2", "launch", "go2_navigation", "localization.launch",
+        "ros2", "launch", "go2_navigation", "navigation.launch",
+        "use_composition:=False",
+        "use_amcl:=True",
+        "use_rviz:=False",
+        # map:= argument is appended dynamically by the web UI
     ],
     "transform": [
         "ros2", "launch", "go2_navigation", "transform.launch",
     ],
     "nav_stack": [
         "ros2", "launch", "go2_navigation", "navigation.launch",
+        "use_composition:=False",
+        "use_amcl:=True",
+    ],
+    "goal_handler": [
+        "python3", "/home/unitree/go2_ws/nav2_goal_handler.py",
     ],
 }
 
@@ -133,10 +142,13 @@ _KILL_PATTERNS = {
     "pcl_to_scan": ["pointcloud_to_laserscan"],
     "navigation": ["bt_navigator", "controller_server", "planner_server",
                     "behavior_server", "lifecycle_manager_navigation"],
-    "localization": ["amcl", "map_server", "lifecycle_manager_localization"],
+    "localization": ["amcl", "map_server", "lifecycle_manager_localization",
+                     "bt_navigator", "controller_server", "planner_server",
+                     "behavior_server", "lifecycle_manager_navigation"],
     "transform": ["robot_state_publisher", "joint_state_publisher"],
     "nav_stack": ["bt_navigator", "controller_server", "planner_server",
                   "behavior_server", "lifecycle_manager_navigation"],
+    "goal_handler": ["nav2_goal_handler"],
 }
 
 
@@ -464,6 +476,179 @@ def save_map():
         pass
 
     return jsonify({"ok": False, "error": "No map saver available. Ensure nav2_map_server or slam_toolbox is running."}), 500
+
+
+# ---------------------------------------------------------------------------
+# Map Config management (multi-map switching with per-map pose & waypoints)
+# ---------------------------------------------------------------------------
+
+MAPS_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "maps.json")
+_maps_lock = threading.Lock()
+
+
+def _load_maps_config():
+    """Load maps.json, create default if missing."""
+    with _maps_lock:
+        if os.path.exists(MAPS_CONFIG_PATH):
+            with open(MAPS_CONFIG_PATH) as f:
+                return json.load(f)
+        # Auto-discover yaml files and create default config
+        default = {"active_map": "", "maps": {}}
+        for search_dir in [os.path.expanduser("~/go2_ws/map"), MAP_SAVE_DIR]:
+            for yf in sorted(globmod.glob(os.path.join(search_dir, "*.yaml"))):
+                mid = os.path.splitext(os.path.basename(yf))[0]
+                if mid not in default["maps"]:
+                    default["maps"][mid] = {
+                        "name": mid.replace("_", " ").title(),
+                        "yaml_path": yf,
+                        "initial_pose": {"x": 0.0, "y": 0.0, "yaw": 0.0},
+                        "waypoints": [],
+                    }
+        if default["maps"]:
+            default["active_map"] = next(iter(default["maps"]))
+        _save_maps_config_unlocked(default)
+        return default
+
+
+def _save_maps_config_unlocked(config):
+    with open(MAPS_CONFIG_PATH, "w") as f:
+        json.dump(config, f, indent=2)
+
+
+def _save_maps_config(config):
+    with _maps_lock:
+        _save_maps_config_unlocked(config)
+
+
+@app.route("/api/maps/config", methods=["GET"])
+def get_maps_config():
+    """Return full maps config (all maps with waypoints, poses, active map)."""
+    return jsonify(_load_maps_config())
+
+
+@app.route("/api/maps/switch", methods=["POST"])
+def switch_map():
+    """Switch the active nav2 2D map via /map_server/load_map service."""
+    data = request.get_json(force=True)
+    new_map_id = data.get("map_id", "")
+    current_waypoints = data.get("current_waypoints")
+
+    config = _load_maps_config()
+    if new_map_id not in config["maps"]:
+        return jsonify({"ok": False, "error": f"Map '{new_map_id}' not found"}), 404
+
+    # Save current waypoints to old active map
+    old_id = config.get("active_map", "")
+    if old_id and old_id in config["maps"] and current_waypoints is not None:
+        config["maps"][old_id]["waypoints"] = current_waypoints
+
+    new_map = config["maps"][new_map_id]
+    yaml_path = new_map["yaml_path"]
+
+    if not os.path.exists(yaml_path):
+        return jsonify({"ok": False, "error": f"Map file not found: {yaml_path}"}), 404
+
+    # Hot-swap map via /map_server/load_map service
+    load_script = (
+        f"python3 -c \""
+        f"import rclpy; rclpy.init(); "
+        f"n = rclpy.create_node('_map_loader'); "
+        f"from nav2_msgs.srv import LoadMap; "
+        f"cli = n.create_client(LoadMap, '/map_server/load_map'); "
+        f"ok = cli.wait_for_service(timeout_sec=10.0); "
+        f"print('Service found:', ok); "
+        f"req = LoadMap.Request(); "
+        f"req.map_url = '{yaml_path}'; "
+        f"future = cli.call_async(req); "
+        f"rclpy.spin_until_future_complete(n, future, timeout_sec=15.0); "
+        f"r = future.result(); "
+        f"print('Result:', r.result if r else 'None'); "
+        f"n.destroy_node(); rclpy.shutdown()\""
+    )
+    print(f"[MapSwitch] Loading map: {yaml_path}")
+    rc, stdout, stderr = _run_cmd(load_script, timeout=30)
+    print(f"[MapSwitch] rc={rc} stdout={stdout}")
+
+    if rc != 0:
+        return jsonify({"ok": False, "error": f"Failed to load map: {stderr}", "rc": rc})
+
+    # Clear costmaps
+    for costmap in ["global_costmap", "local_costmap"]:
+        clear_cmd = (
+            f"ros2 service call /{costmap}/clear_entirely_{costmap} "
+            f"nav2_msgs/srv/ClearEntireCostmap '{{}}'"
+        )
+        _run_cmd(clear_cmd, timeout=10)
+
+    # Update active map
+    config["active_map"] = new_map_id
+    _save_maps_config(config)
+
+    print(f"[MapSwitch] Switched to '{new_map_id}' ({new_map['name']})")
+    return jsonify({
+        "ok": True,
+        "map_id": new_map_id,
+        "name": new_map["name"],
+        "initial_pose": new_map.get("initial_pose", {}),
+        "waypoints": new_map.get("waypoints", []),
+    })
+
+
+@app.route("/api/maps/save", methods=["POST"])
+def save_map_config():
+    """Save/update a map's config (initial_pose, waypoints, name)."""
+    data = request.get_json(force=True)
+    map_id = data.get("map_id", "")
+
+    config = _load_maps_config()
+    if map_id not in config["maps"]:
+        return jsonify({"ok": False, "error": f"Map '{map_id}' not found"}), 404
+
+    m = config["maps"][map_id]
+    if "name" in data:
+        m["name"] = data["name"]
+    if "initial_pose" in data:
+        m["initial_pose"] = data["initial_pose"]
+    if "waypoints" in data:
+        m["waypoints"] = data["waypoints"]
+
+    _save_maps_config(config)
+    return jsonify({"ok": True, "map_id": map_id})
+
+
+@app.route("/api/maps/add", methods=["POST"])
+def add_map_entry():
+    """Add a new map entry to the config."""
+    data = request.get_json(force=True)
+    map_id = data.get("map_id", "")
+    name = data.get("name", map_id)
+    yaml_path = data.get("yaml_path", "")
+
+    if not map_id or not yaml_path:
+        return jsonify({"ok": False, "error": "map_id and yaml_path required"}), 400
+
+    config = _load_maps_config()
+    config["maps"][map_id] = {
+        "name": name,
+        "yaml_path": yaml_path,
+        "initial_pose": data.get("initial_pose", {"x": 0.0, "y": 0.0, "yaw": 0.0}),
+        "waypoints": data.get("waypoints", []),
+    }
+    _save_maps_config(config)
+    return jsonify({"ok": True, "map_id": map_id})
+
+
+@app.route("/api/maps/delete/<map_id>", methods=["DELETE"])
+def delete_map_entry(map_id):
+    """Remove a map entry (does not delete .yaml/.pgm files)."""
+    config = _load_maps_config()
+    if map_id not in config["maps"]:
+        return jsonify({"ok": False, "error": "Not found"}), 404
+    del config["maps"][map_id]
+    if config["active_map"] == map_id:
+        config["active_map"] = next(iter(config["maps"]), "")
+    _save_maps_config(config)
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------
@@ -1309,18 +1494,25 @@ def _nav2_publish_script(topic, msg_type_import, msg_type, msg_fields):
     """Build a Python one-liner that publishes a ROS2 message via rclpy.
 
     This avoids all YAML quoting issues that plague ros2 topic pub through
-    multiple shell layers.  Publishes 3 times over 1.5s to ensure DDS delivery.
+    multiple shell layers.  CycloneDDS discovery can take 1-5 s, so we wait
+    2 s before publishing and then publish 5 times over 2 s.
     """
     return (
         "python3 -c \""
-        "import rclpy; "
+        "import rclpy, time; "
         f"from {msg_type_import} import {msg_type}; "
+        "from builtin_interfaces.msg import Time; "
         "rclpy.init(); "
         "n=rclpy.create_node('web_nav_pub'); "
         f"p=n.create_publisher({msg_type},'{topic}',10); "
-        "import time; time.sleep(0.5); "
+        "time.sleep(2.0); "
         f"m={msg_type}(); "
         f"{msg_fields} "
+        "t=time.time(); "
+        "h=getattr(m,'header',None); "
+        "exec('h.stamp.sec=int(t); h.stamp.nanosec=int((t%1)*1e9)') if h else None; "
+        "p.publish(m); time.sleep(0.3); "
+        "p.publish(m); time.sleep(0.3); "
         "p.publish(m); time.sleep(0.3); "
         "p.publish(m); time.sleep(0.3); "
         "p.publish(m); "
@@ -1350,7 +1542,7 @@ def nav2_send_goal():
         "/goal_pose", "geometry_msgs.msg", "PoseStamped", fields
     )
     print(f"[Nav2] Sending goal: x={x}, y={y}, oz={oz}, ow={ow}")
-    rc, stdout, stderr = _run_cmd(cmd, timeout=10)
+    rc, stdout, stderr = _run_cmd(cmd, timeout=15)
     ok = rc == 0
     if not ok:
         print(f"[Nav2] Goal publish failed: rc={rc} stderr={stderr}")
@@ -1362,37 +1554,100 @@ def nav2_send_goal():
 
 @app.route("/api/nav2/initial_pose", methods=["POST"])
 def nav2_send_initial_pose():
-    """Send an initial pose estimate by publishing to /initialpose."""
+    """Send an initial pose estimate by publishing to /initialpose.
+
+    Publishes BOTH PoseStamped (for lidar_localization_ros2) and
+    PoseWithCovarianceStamped (for AMCL) since they expect different types.
+    """
     data = request.get_json(force=True)
     x = float(data.get("x", 0))
     y = float(data.get("y", 0))
     oz = float(data.get("oz", 0))
     ow = float(data.get("ow", 1))
 
-    fields = (
+    print(f"[Nav2] Setting initial pose: x={x}, y={y}, oz={oz}, ow={ow}")
+
+    # PoseStamped for lidar_localization_ros2
+    ps_fields = (
+        f"m.header.frame_id='map'; "
+        f"m.pose.position.x={x}; m.pose.position.y={y}; "
+        f"m.pose.orientation.z={oz}; m.pose.orientation.w={ow};"
+    )
+    cmd_ps = _nav2_publish_script(
+        "/initialpose", "geometry_msgs.msg", "PoseStamped", ps_fields
+    )
+    rc1, stdout1, stderr1 = _run_cmd(cmd_ps, timeout=15)
+
+    # PoseWithCovarianceStamped for AMCL
+    pwc_fields = (
         f"m.header.frame_id='map'; "
         f"m.pose.pose.position.x={x}; m.pose.pose.position.y={y}; "
         f"m.pose.pose.orientation.z={oz}; m.pose.pose.orientation.w={ow};"
     )
-    cmd = _nav2_publish_script(
-        "/initialpose", "geometry_msgs.msg", "PoseWithCovarianceStamped", fields
+    cmd_pwc = _nav2_publish_script(
+        "/initialpose", "geometry_msgs.msg", "PoseWithCovarianceStamped", pwc_fields
     )
-    print(f"[Nav2] Setting initial pose: x={x}, y={y}, oz={oz}, ow={ow}")
-    rc, stdout, stderr = _run_cmd(cmd, timeout=10)
-    ok = rc == 0
-    return jsonify({"ok": ok, "rc": rc, "stdout": stdout, "stderr": stderr})
+    rc2, stdout2, stderr2 = _run_cmd(cmd_pwc, timeout=15)
+
+    ok = rc1 == 0 or rc2 == 0
+    print(f"[Nav2] Initial pose published: PoseStamped rc={rc1}, PoseWithCovariance rc={rc2}")
+    return jsonify({"ok": ok, "rc_ps": rc1, "rc_pwc": rc2})
+
+
+@app.route("/api/nav2/set_map_odom_tf", methods=["POST"])
+def nav2_set_map_odom_tf():
+    """Publish a static map->odom TF so nav2 and the local costmap work correctly.
+
+    Called from the web UI when user sets initial pose.  Publishes the
+    map->odom transform as a static TF using tf2_ros static_transform_publisher.
+    """
+    data = request.get_json(force=True)
+    tx = float(data.get("x", 0))
+    ty = float(data.get("y", 0))
+    tz = 0.0
+    # Receive quaternion directly
+    qx = 0.0
+    qy = 0.0
+    qz = float(data.get("qz", 0))
+    qw = float(data.get("qw", 1))
+
+    print(f"[Nav2] Setting map->odom TF: t=({tx:.3f},{ty:.3f}) q=({qz:.3f},{qw:.3f})")
+
+    # Kill any existing static TF publisher for map->odom
+    subprocess.run("pkill -f 'static_transform_publisher.*map.*odom'",
+                   shell=True, capture_output=True)
+
+    # Launch a new static TF publisher in the background
+    cmd = (
+        f"ros2 run tf2_ros static_transform_publisher "
+        f"--x {tx} --y {ty} --z {tz} "
+        f"--qx {qx} --qy {qy} --qz {qz} --qw {qw} "
+        f"--frame-id map --child-frame-id odom"
+    )
+    proc = _run_popen(cmd)
+    print(f"[Nav2] Static TF publisher started (pid={proc.pid})")
+
+    return jsonify({"ok": True, "pid": proc.pid, "x": tx, "y": ty, "qz": qz, "qw": qw})
 
 
 @app.route("/api/nav2/cancel", methods=["POST"])
 def nav2_cancel():
-    """Cancel current Nav2 navigation by sending zero velocity."""
-    # Send zero velocity to stop the robot immediately
+    """Cancel current Nav2 navigation by sending zero velocity and cancelling goal handler."""
+    # 1. Send cancel to goal handler (it listens on /nav2_goal_handler/cancel)
+    cancel_fields = "m.header.frame_id='map';"
+    cancel_cmd = _nav2_publish_script(
+        "/nav2_goal_handler/cancel", "geometry_msgs.msg", "PoseStamped", cancel_fields
+    )
+    _run_cmd(cancel_cmd, timeout=8)
+    print("[Nav2] Cancel: sent cancel to goal handler")
+
+    # 2. Send zero velocity to stop the robot immediately
     stop_fields = (
         "m.linear.x=0.0; m.linear.y=0.0; m.linear.z=0.0; "
         "m.angular.x=0.0; m.angular.y=0.0; m.angular.z=0.0;"
     )
     cmd = _nav2_publish_script("/cmd_vel", "geometry_msgs.msg", "Twist", stop_fields)
-    rc, stdout, stderr = _run_cmd(cmd, timeout=8)
+    rc, stdout, stderr = _run_cmd(cmd, timeout=12)
     print(f"[Nav2] Cancel: sent zero velocity, rc={rc}")
     return jsonify({"ok": True, "rc": rc, "stdout": stdout, "stderr": stderr})
 
