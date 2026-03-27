@@ -453,6 +453,7 @@
   btnLoc.addEventListener("click", async () => {
     if (LaunchManager.isRunning("localization")) {
       _setStatus("Stopping Localization...");
+      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "goal_handler" }) });
       await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "localization" }) });
       btnLoc.classList.remove("active");
       locControls.style.display = "none";
@@ -472,11 +473,11 @@
     }
 
     _showModeUI("localization");
-    _setStatus("Starting Localization...");
+    _setStatus("Starting Localization + Navigation (AMCL)...");
     _lastLaunchedProcess = "localization";
 
     // Stop conflicting modes
-    for (const proc of ["slam", "livox", "pcl_to_scan", "navigation", "nav_stack", "transform"]) {
+    for (const proc of ["slam", "livox", "pcl_to_scan", "navigation", "nav_stack", "transform", "goal_handler"]) {
       if (LaunchManager.isRunning(proc)) {
         await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: proc }) });
       }
@@ -492,8 +493,10 @@
       })).json();
     }
 
-    // Launch localization with map (if selected) or without (using topic map)
+    // Launch full nav stack with AMCL + map
+    // (localization command now uses navigation.launch with use_amcl:=True)
     const locArgs = hasLocSelectedMap ? [`map:=${locMapSelect.value}`] : [];
+    _setStatus("Starting AMCL + Nav2 stack...");
     const res = await (await fetch("/api/launch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -502,7 +505,20 @@
 
     if (res.ok) {
       _updateStepBadge("step2-badge", "Localization", "badge-nav");
-      _setStatus(hasLocSelectedMap ? "Localization started with map" : "Localization started (using live map topic)");
+      _setStatus(hasLocSelectedMap
+        ? "AMCL localization started with map — set initial pose, then navigate"
+        : "AMCL localization started (using live map topic) — set initial pose, then navigate");
+
+      // Auto-launch goal handler after nav stack is ready (bt_navigator crashes on Jetson)
+      setTimeout(async () => {
+        _setStatus("Starting goal handler...");
+        await (await fetch("/api/launch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(_launchBody("goal_handler")),
+        })).json();
+        _setStatus("Localization ready — set initial pose on the map, then navigate");
+      }, 5000);
     } else {
       _setStatus("Localization: " + (res.message || res.error));
     }
@@ -513,6 +529,7 @@
   btnNav.addEventListener("click", async () => {
     if (LaunchManager.isRunning("nav_stack") || LaunchManager.isRunning("transform")) {
       _setStatus("Stopping Navigation...");
+      await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "goal_handler" }) });
       await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "nav_stack" }) });
       await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "transform" }) });
       btnNav.classList.remove("active");
@@ -537,7 +554,7 @@
     _lastLaunchedProcess = "nav_stack";
 
     // Stop conflicting modes
-    for (const proc of ["slam", "livox", "pcl_to_scan", "navigation", "localization"]) {
+    for (const proc of ["slam", "livox", "pcl_to_scan", "navigation", "localization", "goal_handler"]) {
       if (LaunchManager.isRunning(proc)) {
         await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: proc }) });
       }
@@ -568,6 +585,17 @@
     if (navRes.ok) {
       _updateStepBadge("step2-badge", "Nav", "badge-nav");
       _setStatus(hasSelectedMap ? "Navigation started with map" : "Navigation started (using live map topic)");
+
+      // Auto-launch lightweight goal handler (replaces bt_navigator which crashes on Jetson)
+      setTimeout(async () => {
+        _setStatus("Starting goal handler...");
+        await (await fetch("/api/launch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(_launchBody("goal_handler")),
+        })).json();
+        _setStatus("Navigation ready — set a goal on the map");
+      }, 3000);
     } else {
       _setStatus("Navigation: " + (navRes.message || navRes.error));
     }
@@ -857,6 +885,126 @@
           const data = await (await fetch("/api/ros2/topics")).json();
           if (data.ok) output.textContent = `Topics (${data.topics.length}):\n` + data.topics.join("\n");
         } catch (_) {}
+      }
+    });
+  }
+
+  // ---- Map Switcher -------------------------------------------------------
+
+  const mapSwitcher = document.getElementById("map-switcher");
+  const btnSwitchMap = document.getElementById("btn-switch-map");
+  const btnSaveMapPose = document.getElementById("btn-save-map-pose");
+  const btnAddMap = document.getElementById("btn-add-map");
+
+  async function _loadMapsConfig() {
+    try {
+      const res = await fetch("/api/maps/config");
+      const config = await res.json();
+      if (!mapSwitcher) return;
+      mapSwitcher.innerHTML = "";
+      for (const [id, m] of Object.entries(config.maps || {})) {
+        const opt = document.createElement("option");
+        opt.value = id;
+        opt.textContent = m.name || id;
+        if (id === config.active_map) opt.selected = true;
+        mapSwitcher.appendChild(opt);
+      }
+      return config;
+    } catch (e) {
+      console.warn("[MapSwitcher] Failed to load config:", e);
+    }
+  }
+
+  // Load on startup
+  _loadMapsConfig();
+
+  if (btnSwitchMap) {
+    btnSwitchMap.addEventListener("click", async () => {
+      const mapId = mapSwitcher.value;
+      if (!mapId) return;
+      btnSwitchMap.textContent = "Loading...";
+      btnSwitchMap.disabled = true;
+      try {
+        // Save current waypoints first
+        const currentWps = typeof Waypoints !== "undefined" && Waypoints.getWaypoints
+          ? Waypoints.getWaypoints() : [];
+        const res = await fetch("/api/maps/switch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ map_id: mapId, current_waypoints: currentWps }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          _setStatus("Switched to map: " + (data.name || mapId));
+          // Load new waypoints
+          if (typeof Waypoints !== "undefined" && Waypoints.setWaypoints && data.waypoints) {
+            Waypoints.setWaypoints(data.waypoints);
+          }
+          // Pre-fill initial pose
+          if (data.initial_pose) {
+            const ip = data.initial_pose;
+            const el = (id) => document.getElementById(id);
+            if (el("init-pose-x")) el("init-pose-x").value = (ip.x || 0).toFixed(2);
+            if (el("init-pose-y")) el("init-pose-y").value = (ip.y || 0).toFixed(2);
+            if (el("init-pose-yaw")) el("init-pose-yaw").value = Math.round((ip.yaw || 0) * 180 / Math.PI);
+          }
+        } else {
+          _setStatus("Map switch failed: " + (data.error || "unknown"));
+        }
+      } catch (e) {
+        _setStatus("Map switch error: " + e.message);
+      }
+      btnSwitchMap.textContent = "Switch";
+      btnSwitchMap.disabled = false;
+    });
+  }
+
+  if (btnSaveMapPose) {
+    btnSaveMapPose.addEventListener("click", async () => {
+      const mapId = mapSwitcher.value;
+      if (!mapId) return;
+      const el = (id) => document.getElementById(id);
+      const x = parseFloat((el("init-pose-x") || {}).value) || 0;
+      const y = parseFloat((el("init-pose-y") || {}).value) || 0;
+      const yawDeg = parseFloat((el("init-pose-yaw") || {}).value) || 0;
+      const yaw = yawDeg * Math.PI / 180;
+      // Also save current waypoints
+      const wps = typeof Waypoints !== "undefined" && Waypoints.getWaypoints
+        ? Waypoints.getWaypoints() : [];
+      try {
+        await fetch("/api/maps/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            map_id: mapId,
+            initial_pose: { x, y, yaw },
+            waypoints: wps,
+          }),
+        });
+        _setStatus("Saved pose & waypoints for map: " + mapId);
+      } catch (e) {
+        _setStatus("Save failed: " + e.message);
+      }
+    });
+  }
+
+  if (btnAddMap) {
+    btnAddMap.addEventListener("click", async () => {
+      const name = prompt("Map name (e.g. Floor 2):");
+      if (!name) return;
+      const yamlPath = prompt("Full path to .yaml file:", "/home/unitree/go2_ws/map/");
+      if (!yamlPath) return;
+      const mapId = name.toLowerCase().replace(/[^a-z0-9]/g, "_");
+      try {
+        await fetch("/api/maps/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ map_id: mapId, name, yaml_path: yamlPath }),
+        });
+        await _loadMapsConfig();
+        _setStatus("Added map: " + name);
+      } catch (e) {
+        _setStatus("Add map failed: " + e.message);
       }
     });
   }

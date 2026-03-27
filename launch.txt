@@ -1,0 +1,15 @@
+terminal 1
+cd turtlebot_web/
+python3 app.py
+
+terminal 2
+ros2 launch go2_navigation localization.launch
+
+terminal 3
+ros2 launch go2_navigation transform.launch
+
+terminal 4
+ros2 launch go2_navigation navigation.launch map:=/home/unitree/go2_ws/map/map.yaml use_rviz:=False use_composition:=False
+
+terminal 5
+python3 ~/go2_ws/nav2_goal_handler.py

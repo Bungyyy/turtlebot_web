@@ -285,11 +285,24 @@ const Controls = (() => {
       }
     }, 100);
 
-    // Cancel Nav2 navigation
+    // Cancel Nav2 goal handler directly (fastest path)
     try {
-      const ac = RosBridge.actionClient("/navigate_to_pose", "nav2_msgs/action/NavigateToPose");
-      ac.cancel();
+      const cancelPub = RosBridge.advertise("/nav2_goal_handler/cancel", "geometry_msgs/msg/PoseStamped");
+      cancelPub.publish(new ROSLIB.Message({ header: { frame_id: "cancel" }, pose: {} }));
     } catch (_) {}
+    // Also zero cmd_vel_nav (nav2's velocity input before velocity_smoother)
+    try {
+      const navVelPub = RosBridge.advertise("/cmd_vel_nav", "geometry_msgs/msg/Twist");
+      for (let i = 0; i < 5; i++) {
+        setTimeout(() => navVelPub.publish(new ROSLIB.Message({
+          linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 }
+        })), i * 50);
+      }
+    } catch (_) {}
+    // Cancel via MapViewer (clears UI state)
+    if (typeof MapViewer !== "undefined") MapViewer.cancelNavigation();
+    // Backend cancel as backup
+    fetch("/api/nav2/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
 
     // Visual feedback
     const btn = document.getElementById("btn-emergency-stop");
