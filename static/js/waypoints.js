@@ -132,18 +132,19 @@ const Waypoints = (() => {
       if (!pose) return;
 
       const dx = pose.x - wp.x, dy = pose.y - wp.y;
-      if (Math.sqrt(dx * dx + dy * dy) < 0.3) {
+      if (Math.sqrt(dx * dx + dy * dy) < 0.45) {
         clearInterval(checkInterval);
 
+        _status(`Reached WP ${currentWpIdx + 1} — waiting 10s...`);
         if (wp.type === "map_switch") {
           // Execute map switch, then continue
           _executeMapSwitch(wp).then(() => {
             currentWpIdx++;
-            setTimeout(_playNext, 1000); // extra delay for map to settle
+            setTimeout(_playNext, 10000);
           });
         } else {
           currentWpIdx++;
-          setTimeout(_playNext, 500);
+          setTimeout(_playNext, 10000);
         }
       }
     }, 2000);
@@ -223,6 +224,10 @@ const Waypoints = (() => {
       tr.addEventListener("click", () => { selectedIdx = i; _renderTable(); });
       tbody.appendChild(tr);
     });
+    // Sync waypoint markers on the map
+    if (typeof MapViewer !== "undefined" && MapViewer.setWaypointMarkers) {
+      MapViewer.setWaypointMarkers(waypoints);
+    }
   }
 
   function goHome() {
