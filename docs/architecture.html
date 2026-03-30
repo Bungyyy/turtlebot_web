@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Web Interface System Architecture — TurtleBot Web</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #0a0e1a;
+    color: #e2e8f0;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── subtle animated grid bg ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 80% 60% at 50% -10%, rgba(99,102,241,.12) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 50% at 80% 100%, rgba(14,165,233,.08) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .page { position: relative; z-index: 1; padding: 48px 40px 64px; max-width: 1400px; margin: 0 auto; }
+
+  /* ── header ── */
+  .header { text-align: center; margin-bottom: 56px; }
+  .header h1 {
+    font-size: 2.6rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, #818cf8, #38bdf8, #34d399);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: -0.03em;
+    margin-bottom: 10px;
+  }
+  .header p {
+    font-size: 1.05rem;
+    color: #94a3b8;
+    font-weight: 400;
+  }
+
+  /* ── architecture grid ── */
+  .arch {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    position: relative;
+  }
+
+  /* connector lines between layers */
+  .connector {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 56px;
+    position: relative;
+  }
+  .connector .line {
+    width: 3px;
+    height: 100%;
+    background: linear-gradient(180deg, rgba(99,102,241,.6), rgba(56,189,248,.6));
+    border-radius: 2px;
+    position: relative;
+  }
+  .connector .line::before,
+  .connector .line::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+  .connector .line::before { top: -4px; background: #818cf8; box-shadow: 0 0 10px rgba(129,140,248,.5); }
+  .connector .line::after  { bottom: -4px; background: #38bdf8; box-shadow: 0 0 10px rgba(56,189,248,.5); }
+
+  .connector .label {
+    position: absolute;
+    right: calc(50% + 24px);
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    gap: 10px;
+  }
+  .connector .label-right {
+    left: calc(50% + 24px);
+    right: auto;
+  }
+  .proto-tag {
+    padding: 3px 12px;
+    border-radius: 20px;
+    font-size: .72rem;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .proto-ws  { background: rgba(129,140,248,.15); color: #a5b4fc; border: 1px solid rgba(129,140,248,.25); }
+  .proto-http { background: rgba(52,211,153,.12); color: #6ee7b7; border: 1px solid rgba(52,211,153,.2); }
+  .proto-ros  { background: rgba(251,146,60,.12); color: #fdba74; border: 1px solid rgba(251,146,60,.2); }
+
+  /* ── layer card ── */
+  .layer {
+    border-radius: 20px;
+    padding: 32px 36px 28px;
+    position: relative;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,.06);
+  }
+  .layer::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 20px;
+    pointer-events: none;
+  }
+
+  /* layer variants */
+  .layer-user {
+    background: linear-gradient(135deg, rgba(99,102,241,.08) 0%, rgba(30,27,75,.35) 100%);
+    border-color: rgba(129,140,248,.18);
+  }
+  .layer-user::before { background: radial-gradient(ellipse at 30% 0%, rgba(99,102,241,.1), transparent 60%); }
+
+  .layer-server {
+    background: linear-gradient(135deg, rgba(14,165,233,.06) 0%, rgba(12,74,110,.2) 100%);
+    border-color: rgba(56,189,248,.15);
+  }
+  .layer-server::before { background: radial-gradient(ellipse at 70% 0%, rgba(14,165,233,.08), transparent 60%); }
+
+  .layer-robot {
+    background: linear-gradient(135deg, rgba(251,146,60,.06) 0%, rgba(120,53,15,.18) 100%);
+    border-color: rgba(251,146,60,.15);
+  }
+  .layer-robot::before { background: radial-gradient(ellipse at 50% 100%, rgba(251,146,60,.08), transparent 60%); }
+
+  /* layer header */
+  .layer-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 22px;
+  }
+  .layer-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.3rem;
+    flex-shrink: 0;
+  }
+  .layer-user .layer-icon  { background: rgba(99,102,241,.18); }
+  .layer-server .layer-icon { background: rgba(14,165,233,.18); }
+  .layer-robot .layer-icon  { background: rgba(251,146,60,.18); }
+
+  .layer-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .layer-subtitle {
+    font-size: .78rem;
+    color: #64748b;
+    font-weight: 400;
+    margin-top: 2px;
+  }
+
+  /* modules grid */
+  .modules {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+  }
+  .module {
+    background: rgba(255,255,255,.03);
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 14px;
+    padding: 18px 20px 16px;
+    transition: transform .2s, border-color .2s, box-shadow .2s;
+    position: relative;
+  }
+  .module:hover {
+    transform: translateY(-2px);
+    border-color: rgba(255,255,255,.12);
+    box-shadow: 0 8px 32px rgba(0,0,0,.25);
+  }
+  .module-name {
+    font-size: .85rem;
+    font-weight: 600;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .module-name .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .layer-user .dot  { background: #818cf8; box-shadow: 0 0 6px rgba(129,140,248,.5); }
+  .layer-server .dot { background: #38bdf8; box-shadow: 0 0 6px rgba(56,189,248,.5); }
+  .layer-robot .dot  { background: #fb923c; box-shadow: 0 0 6px rgba(251,146,60,.5); }
+
+  .module-desc {
+    font-size: .75rem;
+    color: #94a3b8;
+    line-height: 1.55;
+  }
+  .module-tech {
+    margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .tech {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: .62rem;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: rgba(255,255,255,.05);
+    color: #cbd5e1;
+    border: 1px solid rgba(255,255,255,.06);
+  }
+
+  /* ── server split ── */
+  .server-split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .server-block {
+    background: rgba(255,255,255,.03);
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 14px;
+    padding: 20px 22px 18px;
+  }
+  .server-block h4 {
+    font-size: .82rem;
+    font-weight: 600;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .server-block h4 .dot { width: 8px; height: 8px; border-radius: 50%; background: #38bdf8; box-shadow: 0 0 6px rgba(56,189,248,.5); }
+  .endpoint-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .endpoint-list li {
+    font-size: .73rem;
+    color: #94a3b8;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .endpoint-list li::before {
+    content: '';
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: rgba(56,189,248,.5);
+    flex-shrink: 0;
+  }
+
+  /* ── topics bar ── */
+  .topics-bar {
+    margin-top: 18px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+  }
+  .topic {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: .68rem;
+    padding: 4px 12px;
+    border-radius: 8px;
+    background: rgba(251,146,60,.08);
+    border: 1px solid rgba(251,146,60,.15);
+    color: #fdba74;
+  }
+
+  /* ── data flow section ── */
+  .flow-section {
+    margin-top: 56px;
+  }
+  .flow-section h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    text-align: center;
+    margin-bottom: 32px;
+    background: linear-gradient(135deg, #818cf8, #38bdf8);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .flows {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 20px;
+  }
+  .flow-card {
+    background: rgba(255,255,255,.02);
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 16px;
+    padding: 24px 24px 20px;
+    position: relative;
+    overflow: hidden;
+  }
+  .flow-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    border-radius: 16px 16px 0 0;
+  }
+  .flow-card:nth-child(1)::before { background: linear-gradient(90deg, #818cf8, #a78bfa); }
+  .flow-card:nth-child(2)::before { background: linear-gradient(90deg, #38bdf8, #22d3ee); }
+  .flow-card:nth-child(3)::before { background: linear-gradient(90deg, #34d399, #6ee7b7); }
+  .flow-card:nth-child(4)::before { background: linear-gradient(90deg, #fb923c, #fbbf24); }
+
+  .flow-card h4 {
+    font-size: .88rem;
+    font-weight: 600;
+    margin-bottom: 14px;
+  }
+  .flow-steps {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    position: relative;
+  }
+  .flow-steps li {
+    font-size: .73rem;
+    color: #94a3b8;
+    padding: 6px 0 6px 28px;
+    position: relative;
+    line-height: 1.5;
+  }
+  .flow-steps li::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 14px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.2);
+    background: #0a0e1a;
+  }
+  .flow-steps li::after {
+    content: '';
+    position: absolute;
+    left: 11.5px;
+    top: 22px;
+    width: 1px;
+    height: calc(100% - 8px);
+    background: rgba(255,255,255,.08);
+  }
+  .flow-steps li:last-child::after { display: none; }
+
+  .flow-steps li .arrow {
+    color: #64748b;
+    margin: 0 2px;
+  }
+
+  /* ── tech stack banner ── */
+  .tech-stack {
+    margin-top: 56px;
+    text-align: center;
+  }
+  .tech-stack h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-bottom: 28px;
+    background: linear-gradient(135deg, #34d399, #38bdf8);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .tech-pills {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 12px;
+  }
+  .pill {
+    padding: 10px 22px;
+    border-radius: 12px;
+    font-size: .82rem;
+    font-weight: 500;
+    border: 1px solid;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .pill-purple { background: rgba(99,102,241,.1); border-color: rgba(99,102,241,.2); color: #a5b4fc; }
+  .pill-blue   { background: rgba(14,165,233,.1); border-color: rgba(14,165,233,.2); color: #7dd3fc; }
+  .pill-green  { background: rgba(16,185,129,.1); border-color: rgba(16,185,129,.2); color: #6ee7b7; }
+  .pill-orange { background: rgba(251,146,60,.1); border-color: rgba(251,146,60,.2); color: #fdba74; }
+  .pill-pink   { background: rgba(236,72,153,.1); border-color: rgba(236,72,153,.2); color: #f9a8d4; }
+  .pill-cyan   { background: rgba(34,211,238,.08); border-color: rgba(34,211,238,.18); color: #67e8f9; }
+
+  /* ── deployment modes ── */
+  .deploy-section {
+    margin-top: 56px;
+  }
+  .deploy-section h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    text-align: center;
+    margin-bottom: 28px;
+    background: linear-gradient(135deg, #fb923c, #f472b6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .deploy-modes {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+  }
+  .deploy-card {
+    background: rgba(255,255,255,.02);
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 16px;
+    padding: 24px;
+    text-align: center;
+  }
+  .deploy-card .deploy-icon {
+    font-size: 2rem;
+    margin-bottom: 12px;
+    display: block;
+  }
+  .deploy-card h4 {
+    font-size: .9rem;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .deploy-card p {
+    font-size: .73rem;
+    color: #94a3b8;
+    line-height: 1.6;
+  }
+
+  /* ── footer ── */
+  .footer {
+    margin-top: 64px;
+    text-align: center;
+    color: #475569;
+    font-size: .75rem;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <h1>Web Interface System Architecture</h1>
+    <p>TurtleBot Web &mdash; Real-time Robot Control via Browser</p>
+  </div>
+
+  <!-- ===================== ARCHITECTURE LAYERS ===================== -->
+  <div class="arch">
+
+    <!-- ── LAYER 1: User / Frontend ── -->
+    <div class="layer layer-user">
+      <div class="layer-head">
+        <div class="layer-icon">&#x1F310;</div>
+        <div>
+          <div class="layer-title">Frontend &mdash; User Device (Browser)</div>
+          <div class="layer-subtitle">Phone / Laptop / Tablet &bull; HTML5 Canvas &bull; Vanilla JS &bull; roslibjs</div>
+        </div>
+      </div>
+      <div class="modules">
+        <div class="module">
+          <div class="module-name"><span class="dot"></span>Teleop Controls</div>
+          <div class="module-desc">D-pad, virtual joystick, keyboard, and gamepad input for real-time velocity commands. Sport API integration for Go2 gaits.</div>
+          <div class="module-tech"><span class="tech">controls.js</span><span class="tech">Gamepad API</span></div>
+        </div>
+        <div class="module">
+          <div class="module-name"><span class="dot"></span>Map Viewer</div>
+          <div class="module-desc">Canvas-based 2D map rendering with robot pose, LiDAR overlay, navigation path, costmap, and click-to-navigate.</div>
+          <div class="module-tech"><span class="tech">map_viewer.js</span><span class="tech">Canvas 2D</span></div>
+        </div>
+        <div class="module">
+          <div class="module-name"><span class="dot"></span>Waypoint Manager</div>
+          <div class="module-desc">Create, save, and play waypoint sequences. Supports multi-map missions with automatic map switching.</div>
+          <div class="module-tech"><span class="tech">waypoints.js</span><span class="tech">JSON presets</span></div>
+        </div>
+        <div class="module">
+          <div class="module-name"><span class="dot"></span>Launch Manager</div>
+          <div class="module-desc">Start/stop ROS2 processes (bringup, SLAM, navigation) from the browser with live log tailing.</div>
+          <div class="module-tech"><span class="tech">launch_manager.js</span></div>
+        </div>
+        <div class="module">
+          <div class="module-name"><span class="dot"></span>ROS Bridge Client</div>
+          <div class="module-desc">WebSocket connection manager for topic pub/sub, service calls, and action clients via rosbridge.</div>
+          <div class="module-tech"><span class="tech">ros_bridge.js</span><span class="tech">roslibjs</span></div>
+        </div>
+        <div class="module">
+          <div class="module-name"><span class="dot"></span>Camera Viewer</div>
+          <div class="module-desc">Subscribe to compressed/raw image topics from rosbridge and render video frames in browser.</div>
+          <div class="module-tech"><span class="tech">camera.js</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Connector ── -->
+    <div class="connector">
+      <div class="line"></div>
+      <div class="label">
+        <span class="proto-tag proto-ws">WebSocket :9090</span>
+      </div>
+      <div class="label label-right">
+        <span class="proto-tag proto-http">HTTP REST :5000</span>
+      </div>
+    </div>
+
+    <!-- ── LAYER 2: Server ── -->
+    <div class="layer layer-server">
+      <div class="layer-head">
+        <div class="layer-icon">&#x2699;&#xFE0F;</div>
+        <div>
+          <div class="layer-title">Server Layer</div>
+          <div class="layer-subtitle">Flask + rosbridge_server &bull; Jetson or Remote PC</div>
+        </div>
+      </div>
+      <div class="server-split">
+        <div class="server-block">
+          <h4><span class="dot"></span>rosbridge_server (WebSocket)</h4>
+          <ul class="endpoint-list">
+            <li>Real-time topic publish &amp; subscribe</li>
+            <li>ROS2 service call proxying</li>
+            <li>Action client interface (Nav2 goals)</li>
+            <li>TF tree &amp; transform broadcast</li>
+            <li>Bidirectional JSON &#x2194; ROS2 message bridge</li>
+          </ul>
+        </div>
+        <div class="server-block">
+          <h4><span class="dot"></span>Flask Web Server (REST API)</h4>
+          <ul class="endpoint-list">
+            <li><strong>/api/launch</strong> &mdash; Process management (start/stop)</li>
+            <li><strong>/api/maps</strong> &mdash; Map CRUD &amp; hot-swap</li>
+            <li><strong>/api/sport/move</strong> &mdash; Teleop relay (SSH/local)</li>
+            <li><strong>/api/nav2/goal</strong> &mdash; Navigation goal dispatch</li>
+            <li><strong>/api/save_map</strong> &mdash; SLAM map persistence</li>
+            <li><strong>/api/waypoint_presets</strong> &mdash; Mission presets</li>
+            <li><strong>/api/config</strong> &mdash; Server configuration</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Connector ── -->
+    <div class="connector">
+      <div class="line"></div>
+      <div class="label">
+        <span class="proto-tag proto-ros">ROS2 DDS (CycloneDDS)</span>
+      </div>
+    </div>
+
+    <!-- ── LAYER 3: Robot ── -->
+    <div class="layer layer-robot">
+      <div class="layer-head">
+        <div class="layer-icon">&#x1F916;</div>
+        <div>
+          <div class="layer-title">Robot Layer &mdash; Unitree Go2 (Jetson Orin)</div>
+          <div class="layer-subtitle">ROS2 Humble &bull; CycloneDDS &bull; Nav2 &bull; FAST-LIO2</div>
+        </div>
+      </div>
+      <div class="modules">
+        <div class="module">
+          <div class="module-name"><span class="dot"></span>Nav2 Stack</div>
+          <div class="module-desc">Path planning, obstacle avoidance, costmap generation, and autonomous navigation with behavior trees.</div>
+          <div class="module-tech"><span class="tech">nav2</span><span class="tech">AMCL</span></div>
+        </div>
+        <div class="module">
+          <div class="module-name"><span class="dot"></span>FAST-LIO2 SLAM</div>
+          <div class="module-desc">3D LiDAR-inertial odometry and mapping. Point cloud registered to global frame for map building.</div>
+          <div class="module-tech"><span class="tech">fast_lio</span><span class="tech">PointCloud2</span></div>
+        </div>
+        <div class="module">
+          <div class="module-name"><span class="dot"></span>Go2 Sport Controller</div>
+          <div class="module-desc">Unitree Sport API for gait control: Stand, Sit, Damp, Recovery, Walk modes via /api/sport/request.</div>
+          <div class="module-tech"><span class="tech">unitree_api</span></div>
+        </div>
+        <div class="module">
+          <div class="module-name"><span class="dot"></span>Sensor Drivers</div>
+          <div class="module-desc">LiDAR (/scan), IMU, depth camera, and Go2 built-in odometry (/utlidar/robot_pose).</div>
+          <div class="module-tech"><span class="tech">LiDAR</span><span class="tech">IMU</span><span class="tech">Camera</span></div>
+        </div>
+      </div>
+      <div class="topics-bar">
+        <span class="topic">/cmd_vel</span>
+        <span class="topic">/map</span>
+        <span class="topic">/goal_pose</span>
+        <span class="topic">/scan</span>
+        <span class="topic">/tf</span>
+        <span class="topic">/sportmodestate</span>
+        <span class="topic">/bms_state</span>
+        <span class="topic">/cloud_registered</span>
+      </div>
+    </div>
+
+  </div><!-- /arch -->
+
+  <!-- ===================== DATA FLOWS ===================== -->
+  <div class="flow-section">
+    <h2>Data Flow Examples</h2>
+    <div class="flows">
+
+      <div class="flow-card">
+        <h4>&#x1F3AE; Teleop Command</h4>
+        <ul class="flow-steps">
+          <li>User presses D-pad / moves joystick</li>
+          <li>controls.js computes velocity (vx, vy, vyaw)</li>
+          <li>Twist message published to <strong>/cmd_vel</strong></li>
+          <li>rosbridge forwards via WebSocket to ROS2</li>
+          <li>Go2 controller executes movement</li>
+        </ul>
+      </div>
+
+      <div class="flow-card">
+        <h4>&#x1F4CD; Click-to-Navigate</h4>
+        <ul class="flow-steps">
+          <li>User clicks destination on map canvas</li>
+          <li>Canvas pixel <span class="arrow">&rarr;</span> world coordinates</li>
+          <li>PoseStamped published to <strong>/goal_pose</strong></li>
+          <li>Nav2 plans path with obstacle avoidance</li>
+          <li>Robot follows planned trajectory</li>
+        </ul>
+      </div>
+
+      <div class="flow-card">
+        <h4>&#x1F5FA;&#xFE0F; Map &amp; Localization</h4>
+        <ul class="flow-steps">
+          <li>FAST-LIO2 builds 3D point cloud map</li>
+          <li>OccupancyGrid published to <strong>/map</strong></li>
+          <li>rosbridge streams to browser via WebSocket</li>
+          <li>Canvas renders map + robot pose + LiDAR overlay</li>
+          <li>User saves map via REST <span class="arrow">&rarr;</span> .yaml + .pgm</li>
+        </ul>
+      </div>
+
+      <div class="flow-card">
+        <h4>&#x26A0;&#xFE0F; Emergency Stop (Damp)</h4>
+        <ul class="flow-steps">
+          <li>User clicks Damp button</li>
+          <li>POST /api/sport with api_id: 1001</li>
+          <li>Flask publishes to <strong>/api/sport/request</strong></li>
+          <li>Sport controller receives Damp command</li>
+          <li>Robot immediately dampens all joints</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ===================== DEPLOYMENT MODES ===================== -->
+  <div class="deploy-section">
+    <h2>Deployment Modes</h2>
+    <div class="deploy-modes">
+      <div class="deploy-card">
+        <span class="deploy-icon">&#x1F4BB;</span>
+        <h4>Jetson Mode (On-Robot)</h4>
+        <p>Flask + rosbridge run directly on the Jetson Orin. Lowest latency, zero network dependency. Commands execute locally.</p>
+      </div>
+      <div class="deploy-card">
+        <span class="deploy-icon">&#x1F310;</span>
+        <h4>Remote Mode (PC/Laptop)</h4>
+        <p>Flask on external PC, commands relayed via SSH to Jetson. Enables development and control from any device on the network.</p>
+      </div>
+      <div class="deploy-card">
+        <span class="deploy-icon">&#x26A1;</span>
+        <h4>Hybrid (Direct rosbridge)</h4>
+        <p>Browser connects directly to rosbridge WebSocket on robot. Zero-latency teleop. Flask only for management APIs.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== TECH STACK ===================== -->
+  <div class="tech-stack">
+    <h2>Technology Stack</h2>
+    <div class="tech-pills">
+      <div class="pill pill-purple">&#x1F3A8; HTML5 Canvas</div>
+      <div class="pill pill-purple">&#x2699;&#xFE0F; Vanilla JavaScript</div>
+      <div class="pill pill-blue">&#x1F40D; Flask + SocketIO</div>
+      <div class="pill pill-blue">&#x1F310; rosbridge (roslibjs)</div>
+      <div class="pill pill-green">&#x1F916; ROS2 Humble</div>
+      <div class="pill pill-green">&#x1F4E1; CycloneDDS</div>
+      <div class="pill pill-orange">&#x1F9ED; Nav2</div>
+      <div class="pill pill-orange">&#x1F4F7; FAST-LIO2</div>
+      <div class="pill pill-pink">&#x1F43E; Unitree Sport API</div>
+      <div class="pill pill-cyan">&#x1F512; SSH (sshpass)</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    TurtleBot Web &mdash; Capstone Project &mdash; Web Interface System Architecture
+  </div>
+
+</div>
+</body>
+</html>
