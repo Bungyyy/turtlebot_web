@@ -5,9 +5,9 @@
       "name": "Default Map",
       "yaml_path": "/home/unitree/go2_ws/map/map.yaml",
       "initial_pose": {
-        "x": -0.3,
-        "y": -0.8,
-        "yaw": -1.57
+        "x": 0,
+        "y": 0,
+        "yaw": 0
       },
       "waypoints": []
     }

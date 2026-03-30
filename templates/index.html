@@ -375,10 +375,20 @@
               <h3>Waypoints</h3>
               <div class="wp-toolbar">
                 <button id="btn-play-wp" class="btn-icon btn-green" title="Play Waypoints">&#9654;</button>
-                <button id="btn-add-wp" class="btn-icon" title="Add Waypoint">+</button>
+                <button id="btn-add-wp" class="btn-icon" title="Add Current Pose">+</button>
+                <button id="btn-add-wp-click" class="btn-icon" title="Click Map to Add Waypoints" style="font-size: 13px;">&#128204;</button>
                 <button id="btn-add-map-switch-wp" class="btn-icon" title="Add Map-Switch Waypoint" style="font-size: 14px;">&#8644;</button>
                 <button id="btn-del-wp" class="btn-icon btn-red" title="Delete Waypoint">&minus;</button>
               </div>
+            </div>
+            <!-- Preset save/load -->
+            <div style="display: flex; gap: 4px; padding: 4px 8px;">
+              <select id="preset-selector" style="flex: 1; font-size: 11px; padding: 2px 4px; background: #1a1a2e; color: #ccc; border: 1px solid #444; border-radius: 4px;">
+                <option value="">-- Presets --</option>
+              </select>
+              <button id="btn-load-preset" class="btn btn-sm" style="font-size: 11px; padding: 3px 6px; background: #3a7bd5; color: #fff; border: none; border-radius: 4px; cursor: pointer;" title="Load selected preset">Load</button>
+              <button id="btn-save-preset" class="btn btn-sm" style="font-size: 11px; padding: 3px 6px; background: #2d8a4e; color: #fff; border: none; border-radius: 4px; cursor: pointer;" title="Save current waypoints as preset">Save</button>
+              <button id="btn-del-preset" class="btn btn-sm" style="font-size: 11px; padding: 3px 6px; background: #c53030; color: #fff; border: none; border-radius: 4px; cursor: pointer;" title="Delete selected preset">&#10005;</button>
             </div>
             <div class="wp-table-wrap">
               <table id="waypoint-table">

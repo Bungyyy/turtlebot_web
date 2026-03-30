@@ -652,6 +652,69 @@ def delete_map_entry(map_id):
 
 
 # ---------------------------------------------------------------------------
+# Waypoint Presets (save / load / delete named waypoint sequences)
+# ---------------------------------------------------------------------------
+
+WAYPOINT_PRESETS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "waypoint_presets.json")
+_presets_lock = threading.Lock()
+
+
+def _load_presets():
+    with _presets_lock:
+        if os.path.exists(WAYPOINT_PRESETS_PATH):
+            with open(WAYPOINT_PRESETS_PATH) as f:
+                return json.load(f)
+        return {}
+
+
+def _save_presets(presets):
+    with _presets_lock:
+        with open(WAYPOINT_PRESETS_PATH, "w") as f:
+            json.dump(presets, f, indent=2)
+
+
+@app.route("/api/waypoint_presets", methods=["GET"])
+def list_waypoint_presets():
+    """List all saved waypoint presets (name → waypoint count)."""
+    presets = _load_presets()
+    summary = {name: len(wps) for name, wps in presets.items()}
+    return jsonify({"ok": True, "presets": summary})
+
+
+@app.route("/api/waypoint_presets/<name>", methods=["GET"])
+def get_waypoint_preset(name):
+    """Load a specific waypoint preset."""
+    presets = _load_presets()
+    if name not in presets:
+        return jsonify({"ok": False, "error": f"Preset '{name}' not found"}), 404
+    return jsonify({"ok": True, "name": name, "waypoints": presets[name]})
+
+
+@app.route("/api/waypoint_presets/<name>", methods=["POST"])
+def save_waypoint_preset(name):
+    """Save/overwrite a waypoint preset."""
+    data = request.get_json(force=True)
+    waypoints = data.get("waypoints", [])
+    if not waypoints:
+        return jsonify({"ok": False, "error": "No waypoints provided"}), 400
+    presets = _load_presets()
+    presets[name] = waypoints
+    _save_presets(presets)
+    return jsonify({"ok": True, "name": name, "count": len(waypoints)})
+
+
+@app.route("/api/waypoint_presets/<name>", methods=["DELETE"])
+def delete_waypoint_preset(name):
+    """Delete a waypoint preset."""
+    presets = _load_presets()
+    if name not in presets:
+        return jsonify({"ok": False, "error": f"Preset '{name}' not found"}), 404
+    del presets[name]
+    _save_presets(presets)
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
 # Camera stream proxy (optional – used when rosbridge video is unavailable)
 # ---------------------------------------------------------------------------
 camera_frame = None

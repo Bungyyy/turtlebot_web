@@ -736,6 +736,9 @@ const MapViewer = (() => {
     // 8. Goal marker
     if (goalPose) _drawMarker(goalPose.x, goalPose.y, "#3182ce", "G");
 
+    // 8b. Waypoint markers
+    if (_waypointList.length > 0) _drawWaypoints();
+
     // 9. Robot (green triangle)
     if (robotPose && layers.robot) _drawRobot();
 
@@ -953,6 +956,41 @@ const MapViewer = (() => {
   }
 
   // ---- Markers ----------------------------------------------------------
+
+  // ---- Waypoint markers ---------------------------------------------------
+  let _waypointList = []; // set via setWaypoints()
+
+  function setWaypointMarkers(wps) { _waypointList = wps || []; _render(); }
+
+  function _drawWaypoints() {
+    _waypointList.forEach((wp, i) => {
+      const { cx, cy } = _worldToCanvas(wp.x, wp.y);
+      // Connecting line to next waypoint
+      if (i < _waypointList.length - 1) {
+        const next = _waypointList[i + 1];
+        const n = _worldToCanvas(next.x, next.y);
+        ctx.save();
+        ctx.strokeStyle = "rgba(168,85,247,0.5)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(n.cx, n.cy);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+      // Waypoint dot
+      ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+      ctx.fillStyle = wp.type === "map_switch" ? "#c084fc" : "#a855f7";
+      ctx.fill();
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.stroke();
+      // Number label
+      ctx.fillStyle = "#fff"; ctx.font = "bold 9px sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(String(i + 1), cx, cy);
+    });
+  }
 
   function _drawMarker(wx, wy, color, label) {
     const { cx, cy } = _worldToCanvas(wx, wy);
@@ -1268,6 +1306,15 @@ const MapViewer = (() => {
       } else if (mode === "initial_pose") {
         _sendInitialPose(wx, wy, headingAngle);
         _notifyModeComplete("initial_pose", wx, wy, headingAngle);
+      } else if (mode === "add_waypoint") {
+        // Add waypoint and stay in mode for multi-click
+        _notifyModeComplete("add_waypoint", wx, wy, headingAngle);
+        headingDrag = false;
+        headingStart = null;
+        headingJustCompleted = true;
+        // Stay in add_waypoint mode — don't clear interactionMode
+        _render();
+        return;
       }
 
       headingDrag = false;
@@ -1372,5 +1419,5 @@ const MapViewer = (() => {
            centerOnRobot: _centerOnRobot, fitMap: _autoFit, clearScanHistory,
            cancelNavigation, onModeComplete, sendInitialPose: _sendInitialPose,
            sendNavGoal: _sendNavGoal, getNav2Status: () => nav2Status,
-           hasMapTopic: () => !!mapData };
+           hasMapTopic: () => !!mapData, setWaypointMarkers };
 })();

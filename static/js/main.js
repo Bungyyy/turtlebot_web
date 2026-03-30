@@ -610,10 +610,17 @@
 
   function _showNavBanner(mode, text) {
     navBanner.style.display = "flex";
-    navBanner.className = "nav-mode-banner " + (mode === "initial_pose" ? "mode-initial" : "mode-navigate");
+    const modeClass = mode === "initial_pose" ? "mode-initial" : "mode-navigate";
+    navBanner.className = "nav-mode-banner " + modeClass;
     navBannerText.textContent = text;
-    navModeBadge.textContent = mode === "initial_pose" ? "Setting Pose" : "Setting Goal";
-    navModeBadge.className = "step-badge " + (mode === "initial_pose" ? "badge-slam" : "badge-nav");
+    const badgeText = mode === "initial_pose" ? "Setting Pose"
+                    : mode === "add_waypoint" ? "Adding WPs"
+                    : "Setting Goal";
+    const badgeClass = mode === "initial_pose" ? "badge-slam"
+                     : mode === "add_waypoint" ? "badge-nav"
+                     : "badge-nav";
+    navModeBadge.textContent = badgeText;
+    navModeBadge.className = "step-badge " + badgeClass;
   }
 
   function _hideNavBanner() {
@@ -698,6 +705,7 @@
       document.getElementById("init-pose-x").value = x.toFixed(2);
       document.getElementById("init-pose-y").value = y.toFixed(2);
       document.getElementById("init-pose-yaw").value = deg;
+      _hideNavBanner();
     } else if (mode === "navigate") {
       document.getElementById("nav-goal-x").value = x.toFixed(2);
       document.getElementById("nav-goal-y").value = y.toFixed(2);
@@ -705,8 +713,115 @@
       btnCancelNav.style.display = "block";
       navModeBadge.textContent = "Navigating";
       navModeBadge.className = "step-badge badge-nav";
+      _hideNavBanner();
+    } else if (mode === "add_waypoint") {
+      // Add clicked position as waypoint — stay in mode
+      const oz = Math.sin(yaw / 2), ow = Math.cos(yaw / 2);
+      Waypoints.addWaypoint(x, y, oz, ow);
+      _setStatus(`Waypoint added at (${x.toFixed(2)}, ${y.toFixed(2)}) — click to add more, ESC to finish`);
     }
-    _hideNavBanner();
+  });
+
+  // "Click Map to Add Waypoint" button
+  document.getElementById("btn-add-wp-click").addEventListener("click", () => {
+    MapViewer.setMode("add_waypoint");
+    _showNavBanner("add_waypoint", "Click map to add waypoints (drag to set heading, ESC to finish)");
+    _setStatus("Click on the map to add waypoints");
+  });
+
+  // ESC key exits add_waypoint mode
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      MapViewer.setMode(null);
+      _hideNavBanner();
+    }
+  });
+
+  // ---- Waypoint Presets ---------------------------------------------------
+
+  const presetSelector = document.getElementById("preset-selector");
+
+  async function _loadPresetList() {
+    try {
+      const res = await fetch("/api/waypoint_presets");
+      const data = await res.json();
+      if (!data.ok) return;
+      // Keep first option (placeholder)
+      presetSelector.innerHTML = '<option value="">-- Presets --</option>';
+      for (const [name, count] of Object.entries(data.presets || {})) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = `${name} (${count} pts)`;
+        presetSelector.appendChild(opt);
+      }
+    } catch (e) {
+      console.warn("[Presets] Failed to load:", e);
+    }
+  }
+
+  // Load preset list on startup
+  _loadPresetList();
+
+  // Load preset
+  document.getElementById("btn-load-preset").addEventListener("click", async () => {
+    const name = presetSelector.value;
+    if (!name) { _setStatus("Select a preset first"); return; }
+    try {
+      const res = await fetch(`/api/waypoint_presets/${encodeURIComponent(name)}`);
+      const data = await res.json();
+      if (data.ok && data.waypoints) {
+        Waypoints.setWaypoints(data.waypoints);
+        _setStatus(`Loaded preset "${name}" (${data.waypoints.length} waypoints)`);
+      } else {
+        _setStatus("Failed to load preset: " + (data.error || "unknown"));
+      }
+    } catch (e) {
+      _setStatus("Load preset error: " + e.message);
+    }
+  });
+
+  // Save preset
+  document.getElementById("btn-save-preset").addEventListener("click", async () => {
+    const wps = Waypoints.getWaypoints();
+    if (wps.length === 0) { _setStatus("No waypoints to save"); return; }
+    const name = prompt("Preset name:");
+    if (!name) return;
+    try {
+      const res = await fetch(`/api/waypoint_presets/${encodeURIComponent(name)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ waypoints: wps }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        _setStatus(`Saved preset "${name}" (${wps.length} waypoints)`);
+        await _loadPresetList();
+        presetSelector.value = name;
+      } else {
+        _setStatus("Save preset failed: " + (data.error || "unknown"));
+      }
+    } catch (e) {
+      _setStatus("Save preset error: " + e.message);
+    }
+  });
+
+  // Delete preset
+  document.getElementById("btn-del-preset").addEventListener("click", async () => {
+    const name = presetSelector.value;
+    if (!name) { _setStatus("Select a preset to delete"); return; }
+    if (!confirm(`Delete preset "${name}"?`)) return;
+    try {
+      const res = await fetch(`/api/waypoint_presets/${encodeURIComponent(name)}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.ok) {
+        _setStatus(`Deleted preset "${name}"`);
+        await _loadPresetList();
+      } else {
+        _setStatus("Delete failed: " + (data.error || "unknown"));
+      }
+    } catch (e) {
+      _setStatus("Delete preset error: " + e.message);
+    }
   });
 
   // Update cancel button visibility based on nav2 status
